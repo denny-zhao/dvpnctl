@@ -24,8 +24,38 @@ struct VPNCoreTests {
         try tests.testBackgroundSessionControlsVPNWorker()
         try tests.testBackgroundRuntimeRequiresProtectedPath()
         try tests.testBackgroundSessionControlsVPNWorker(childExit: 42)
-        print("19 tests passed")
+        try tests.testLanguageChoicePersistsAndResolvesSystemPreferences()
+        tests.testStatusAndErrorsRenderInBothLanguages()
+        try tests.testLanguageDoesNotOversizeRequestWithReconnectOff()
+        print("22 tests passed")
         try tests.testKeychainRoundTripIfEnabled()
+    }
+
+    func testLanguageChoicePersistsAndResolvesSystemPreferences() throws {
+        let suite = "dvpnctl.tests.language.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        check(LanguageChoice.load(from: defaults) == .system)
+        check(LanguageChoice.system.resolve(["fr-FR", "zh-Hans-CN", "en-US"]) == .simplifiedChinese)
+        check(LanguageChoice.system.resolve(["en-GB", "zh-CN"]) == .english)
+        check(LanguageChoice.system.resolve(["fr-FR"]) == .english)
+        check(LanguageChoice.system.resolve(["zh-Hant-TW", "en-US"]) == .english)
+        LanguageChoice.english.save(to: defaults)
+        check(LanguageChoice.load(from: defaults) == .english)
+        check(LanguageChoice.load(from: defaults).resolve(["zh-CN"]) == .english)
+        LanguageChoice.simplifiedChinese.save(to: defaults)
+        check(LanguageChoice.load(from: defaults).resolve(["en-US"]) == .simplifiedChinese)
+        LanguageChoice.system.save(to: defaults)
+        check(LanguageChoice.load(from: defaults) == .system)
+    }
+
+    func testStatusAndErrorsRenderInBothLanguages() {
+        check(TunnelStatus.connected.title.render(.english) == "Connected")
+        check(TunnelStatus.connected.title.render(.simplifiedChinese) == "已连接")
+        let error = VPNError("Profile is missing.", "未找到配置。")
+        let message = AppText.from(error).appending(AppText(" Check your settings.", " 请检查设置。"))
+        check(message.render(.english) == "Profile is missing. Check your settings.")
+        check(message.render(.simplifiedChinese) == "未找到配置。 请检查设置。")
     }
 
     func testLegacyProfileMigration() throws {
@@ -143,12 +173,30 @@ struct VPNCoreTests {
     func testBackgroundSessionWaitsForAdmission() throws {
         try exerciseBackgroundSession { socket in
             check(try !socket.waitForInput(milliseconds: 100))
-            try BackgroundEvent.rejected("VPN 忙碌").send(to: socket)
+            try BackgroundEvent.rejection(.busy).send(to: socket)
         } client: { session, socket, request in
             var events = [AuthorizationSession.Event]()
             let failure = try session.run(socket: socket, request: request) { events.append($0) }
-            check(failure == "VPN 忙碌")
+            check(failure?.render(.english) == "A VPN session is already running. Disconnect it first.")
+            check(failure?.render(.simplifiedChinese) == "已有 VPN 会话，请先断开。")
             check(events.isEmpty)
+        }
+    }
+
+    func testLanguageDoesNotOversizeRequestWithReconnectOff() throws {
+        var profile = sampleProfile
+        profile.keepConnected = false
+        profile.retryInterval = String(repeating: "0", count: 8192)
+        try exerciseBackgroundSession { socket in
+            try BackgroundEvent.accepted.send(to: socket)
+            let received = try socket.readRequest()
+            check(received.language == .simplifiedChinese)
+            check(!received.profile.keepConnected)
+            check(try received.profile.configuration(password: received.password).contains("persistent = 0"))
+            try BackgroundEvent.finished(0).send(to: socket)
+        } client: { session, socket, _ in
+            let request = VPNRequest(profile: profile, password: "demo-password", language: .simplifiedChinese)
+            check(try session.run(socket: socket, request: request) { _ in } == nil)
         }
     }
 
@@ -169,7 +217,7 @@ struct VPNCoreTests {
                 }
             }
             check(observedLog == Data("Tunnel log\n".utf8))
-            check(failure?.contains("断开未正常完成") == true)
+            check(failure == .disconnectFailed)
         }
     }
 
@@ -218,7 +266,7 @@ struct VPNCoreTests {
                     if String(decoding: output, as: UTF8.self).contains("ready\n") { session.stop() }
                 }
             }
-            check(childExit == 0 ? failure == nil : failure?.contains("断开未正常完成") == true)
+            check(childExit == 0 ? failure == nil : failure == .disconnectFailed)
             check(String(decoding: output, as: UTF8.self) == "ready\nstopped\n")
         }
     }
@@ -314,7 +362,7 @@ struct VPNCoreTests {
         while :; do /bin/sleep 0.1; done
         """
         try exerciseWorker(script: script, expectedStatus: VPNWorker.shutdownTimedOut,
-                           expectedOutput: "无法确认 VPN 路由和 DNS 已恢复")
+                           expectedOutput: "VPN routes and DNS may not have been restored.")
     }
 
     func testFullLogSocketDoesNotBlockSender() throws {

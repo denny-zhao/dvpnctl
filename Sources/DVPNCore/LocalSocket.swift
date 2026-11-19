@@ -9,7 +9,7 @@ private func withUnixAddress<Result>(path: String, _ body: (UnsafePointer<sockad
     var address = sockaddr_un()
     let bytes = path.utf8CString
     let size = MemoryLayout<sockaddr_un>.size
-    guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else { throw VPNError("套接字路径过长。") }
+    guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else { throw VPNError("Socket path is too long.", "套接字路径过长。") }
     address.sun_len = UInt8(size)
     address.sun_family = sa_family_t(AF_UNIX)
     withUnsafeMutableBytes(of: &address.sun_path) { destination in
@@ -44,7 +44,7 @@ final class LocalSocket {
         guard try withUnixAddress(path: path, { Darwin.connect(socket.descriptor, $0, $1) }) == 0 else {
             throw posixFailure("connect")
         }
-        guard socket.peerIs(user: expectedUser) else { throw VPNError("本地连接的用户身份不符。") }
+        guard socket.peerIs(user: expectedUser) else { throw VPNError("The local connection's user identity did not match.", "本地连接的用户身份不符。") }
         return socket
     }
 
@@ -106,9 +106,11 @@ final class LocalSocket {
     }
 
     func sendRequest(_ request: VPNRequest) throws {
+        var request = request
+        if !request.profile.keepConnected { request.profile.retryInterval = VPNProfile().retryInterval }
         var data = try JSONEncoder().encode(request)
         data.append(10)
-        guard data.count <= Self.requestLimit else { throw VPNError("连接配置过长。") }
+        guard data.count <= Self.requestLimit else { throw VPNError("The VPN request is too large.", "连接配置过长。") }
         try send(data)
     }
 
@@ -124,7 +126,7 @@ final class LocalSocket {
             guard data.count <= Self.requestLimit else { break }
             if data.last == 10 { return try JSONDecoder().decode(VPNRequest.self, from: data) }
         }
-        throw VPNError("未收到完整的连接配置。")
+        throw VPNError("The VPN request was incomplete.", "未收到完整的连接配置。")
     }
 
     func endInput() { _ = shutdown(descriptor, SHUT_WR) }

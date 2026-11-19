@@ -17,22 +17,27 @@ enum VPNWorker {
                     protectedRuntime: Bool = false, shouldStop: () -> Bool = { false },
                     onOutput: ((Data) throws -> Void)? = nil) -> Int32 {
         let emit = onOutput ?? socket.send
+        var language = AppLanguage.english
         do {
             let request = try socket.readRequest()
+            language = request.language ?? .english
             if shouldStop() { return 0 }
             let config = try request.profile.configuration(password: request.password)
-            guard let executable else { throw VPNError("找不到 openfortivpn。请先运行 brew install openfortivpn。") }
+            guard let executable else {
+                throw VPNError("openfortivpn was not found. Run brew install openfortivpn first.", "找不到 openfortivpn。请先运行 brew install openfortivpn。")
+            }
             return try supervise(socket: socket, executable: executable, config: Data(config.utf8),
                                  stopGracePeriod: stopGracePeriod, protectedRuntime: protectedRuntime,
-                                 shouldStop: shouldStop, emit: emit)
+                                 language: language, shouldStop: shouldStop, emit: emit)
         } catch {
-            try? emit(Data("dFortiClient: \(error.localizedDescription)\n".utf8))
+            try? emit(Data("dFortiClient: \(AppText.from(error).render(language))\n".utf8))
             return 1
         }
     }
 
     private static func supervise(socket: LocalSocket, executable: String, config: Data,
-                                  stopGracePeriod: TimeInterval, protectedRuntime: Bool, shouldStop: () -> Bool,
+                                  stopGracePeriod: TimeInterval, protectedRuntime: Bool, language: AppLanguage,
+                                  shouldStop: () -> Bool,
                                   emit: (Data) throws -> Void) throws -> Int32 {
         let configuration = Pipe()
         try configuration.fileHandleForWriting.write(contentsOf: config)
@@ -41,7 +46,7 @@ enum VPNWorker {
         let output = Pipe()
         let reader = output.fileHandleForReading
         guard fcntl(reader.fileDescriptor, F_SETFL, O_NONBLOCK) != -1 else {
-            throw VPNError("无法读取 openfortivpn 的输出。")
+            throw VPNError("Could not read openfortivpn output.", "无法读取 openfortivpn 的输出。")
         }
         let child = Process()
         child.executableURL = URL(fileURLWithPath: executable)
@@ -73,7 +78,9 @@ enum VPNWorker {
             guard let deadline = shutdownDeadline, !forced, ProcessInfo.processInfo.systemUptime >= deadline,
                   child.isRunning, kill(child.processIdentifier, SIGKILL) == 0 else { return }
             forced = true
-            try? emit(Data("dFortiClient: 正常断开超时，已强制停止；无法确认 VPN 路由和 DNS 已恢复。\n".utf8))
+            let message = AppText("Graceful disconnection timed out and the process was stopped. VPN routes and DNS may not have been restored.",
+                                  "正常断开超时，已强制停止；无法确认 VPN 路由和 DNS 已恢复。")
+            try? emit(Data("dFortiClient: \(message.render(language))\n".utf8))
         }
         defer {
             stop()

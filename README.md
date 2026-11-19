@@ -1,5 +1,7 @@
 # dFortiClient
 
+**简体中文** · [English](README.en.md)
+
 macOS 菜单栏里的 OpenFortiVPN 图形客户端。支持多个命名配置、从菜单选择 VPN、用 macOS 钥匙串保存密码、掉线重连，以及可选的 VPN 后台服务。
 
 ## 安装
@@ -26,18 +28,20 @@ Apple 要求包含 LaunchDaemon 的分发构建经过公证。当前本地安装
 
 免逐次授权的服务不运行普通用户可改写的 Homebrew 二进制及其动态库。可用以下命令从校验过的上游源码构建静态链接 OpenSSL 的客户端，然后由管理员安装。不要把 Homebrew 的动态链接版本直接复制到此路径。
 
-在仓库根目录 `it-admin` 运行以下命令；`vpn-runtime` 目标定义在 `dvpnctl/Makefile`，不在根目录的 Makefile 里。
+在本项目的 `dvpnctl` 目录（与本文档及 `Makefile` 同级）运行以下命令。如果在上一级 `it-admin` 目录，请先运行 `cd dvpnctl`。
 
 ```sh
 brew install autoconf automake pkgconf openssl@3
-make -C dvpnctl vpn-runtime &&
+make vpn-runtime &&
   sudo install -d -o root -g wheel -m 0755 '/Library/Application Support/dFortiClient' &&
-  sudo install -o root -g wheel -m 0755 dvpnctl/.build/openfortivpn '/Library/Application Support/dFortiClient/openfortivpn'
+  sudo install -o root -g wheel -m 0755 .build/openfortivpn '/Library/Application Support/dFortiClient/openfortivpn'
 ```
 
 日常连接不需要运行这些命令。要更新此客户端，先断开 VPN，再构建并以相同方式安装新版。
 
 ## 使用
+
+在主窗口切换到「设置」标签，或从菜单栏打开「设置…」，再用「语言」选择「跟随系统」、English 或简体中文。界面立即更新，不会中断连接，选择会在重启后保留。配置名称和 macOS 系统对话框不受影响；日志会原样显示，连接进程的诊断文字使用启动该连接时的语言。
 
 1. 点「新建」，填写配置名称、VPN 网关（域名或 IPv4，不带协议和端口）、端口和用户名，然后点「保存配置」。Realm 和证书 SHA-256 指纹按管理员提供的信息填写，留空指纹时使用 OpenFortiVPN 的默认 TLS 校验。旧版配置会自动迁移为「默认 VPN」。
 2. 如需记住密码，输入 VPN 密码，勾选「将密码保存到 macOS 钥匙串」并保存。之后可以留空密码，或输入新密码并保存以替换。取消勾选后保存，或删除配置，会移除该配置的钥匙串密码。修改网关、账号、Realm 或证书指纹后，不会自动复用原密码。

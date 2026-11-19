@@ -26,11 +26,11 @@ enum DaemonMain {
                 if try listener.waitForInput(milliseconds: 150) {
                     let socket = try listener.accept()
                     guard let user = socket.peerUser(), PrivilegePolicy.isAdministrator(user) else {
-                        try? BackgroundEvent.rejected("VPN 后台服务只接受本机管理员账户。").send(to: socket)
+                        try? BackgroundEvent.rejection(.administratorRequired).send(to: socket)
                         continue
                     }
                     if connection.wait(timeout: .now()) == .timedOut {
-                        try? BackgroundEvent.rejected("已有 VPN 会话，请先断开。").send(to: socket)
+                        try? BackgroundEvent.rejection(.busy).send(to: socket)
                         continue
                     }
                     workerQueue.async(group: connection) { handle(socket, shutdown: shutdown) }
@@ -48,8 +48,7 @@ enum DaemonMain {
         guard !shutdown.isStopped else { return }
         let executable = PrivilegePolicy.backgroundRuntime
         guard PrivilegePolicy.isProtectedRuntime(at: executable) else {
-            try? BackgroundEvent.rejected("后台服务需要管理员部署受保护的 openfortivpn。请参阅安装说明。")
-                .send(to: socket)
+            try? BackgroundEvent.rejection(.runtimeRequired).send(to: socket)
             return
         }
         guard (try? BackgroundEvent.accepted.send(to: socket)) != nil else { return }

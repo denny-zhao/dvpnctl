@@ -7,12 +7,12 @@ final class BackgroundService {
     enum State: Equatable {
         case disabled, pending, enabled, unavailable
 
-        var title: String {
+        var title: AppText {
             switch self {
-            case .disabled: return "未启用"
-            case .pending: return "等待管理员批准"
-            case .enabled: return "已启用"
-            case .unavailable: return "不可用"
+            case .disabled: return AppText("Not enabled", "未启用")
+            case .pending: return AppText("Awaiting administrator approval", "等待管理员批准")
+            case .enabled: return AppText("Enabled", "已启用")
+            case .unavailable: return AppText("Unavailable", "不可用")
             }
         }
     }

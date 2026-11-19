@@ -5,7 +5,7 @@ final class AuthorizationSession {
     enum Event {
         case authorized
         case output(Data)
-        case finished(String?)
+        case finished(AppText?)
     }
 
     private let cancellation = SessionCancellation()
@@ -16,7 +16,7 @@ final class AuthorizationSession {
 
     func start(request: VPNRequest, worker: URL, useBackground: Bool, report: @escaping (Event) -> Void) {
         DispatchQueue(label: "dvpnctl.authorization", qos: .userInitiated).async {
-            let failure: String?
+            let failure: AppText?
             do {
                 if useBackground {
                     failure = try BackgroundSession(cancellation: self.cancellation).run(request: request, report: report)
@@ -24,21 +24,22 @@ final class AuthorizationSession {
                     failure = try self.run(request: request, worker: worker, report: report)
                 }
             }
-            catch { failure = error.localizedDescription }
+            catch { failure = AppText.from(error) }
             report(.finished(failure))
         }
     }
 
-    private func run(request: VPNRequest, worker: URL, report: (Event) -> Void) throws -> String? {
+    private func run(request: VPNRequest, worker: URL, report: (Event) -> Void) throws -> AppText? {
         guard !shouldStop else { return nil }
         var listener: LocalListener? = try LocalListener()
         guard let path = listener?.path else { return nil }
         let command = ["exec", "--", Self.shellQuote(worker.path), "--vpn-worker", Self.shellQuote(path), String(getuid())]
             .joined(separator: " ") + " </dev/null >/dev/null 2>&1"
-        let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let prompt = AppText("dFortiClient: OpenFortiVPN requires administrator privileges to configure the VPN.",
+                             "dFortiClient：OpenFortiVPN 需要管理员权限才能配置 VPN。").render(request.language ?? .english)
         let authorization = Process()
         authorization.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        authorization.arguments = ["-e", "do shell script \"\(escaped)\" with prompt \"dFortiClient: OpenFortiVPN requires administrator privileges to configure the VPN.\" with administrator privileges"]
+        authorization.arguments = ["-e", "do shell script \(Self.scriptString(command)) with prompt \(Self.scriptString(prompt)) with administrator privileges"]
         let errors = Pipe()
         authorization.standardError = errors
         authorization.standardOutput = FileHandle.nullDevice
@@ -90,12 +91,18 @@ final class AuthorizationSession {
         let stderr = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         if shouldStop {
             return sentRequest && authorization.terminationStatus != 0
-                ? "断开未正常完成，请查看日志并检查 VPN 路由和 DNS。" : nil
+                ? .disconnectFailed : nil
         }
         if !authorized {
-            return stderr.contains("(-128)") ? "已取消管理员授权。" : "无法启动 VPN 或取得管理员授权。"
+            return stderr.contains("(-128)")
+                ? AppText("Administrator approval was canceled.", "已取消管理员授权。")
+                : AppText("Could not start the VPN or obtain administrator approval.", "无法启动 VPN 或取得管理员授权。")
         }
-        return authorization.terminationStatus == 0 ? nil : "openfortivpn 异常退出，请查看连接日志。"
+        return authorization.terminationStatus == 0 ? nil : .workerExited
+    }
+
+    private static func scriptString(_ value: String) -> String {
+        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
     private static func shellQuote(_ value: String) -> String {

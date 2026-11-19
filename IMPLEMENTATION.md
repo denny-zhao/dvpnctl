@@ -18,3 +18,10 @@
 2. Add a socket-activated SMAppService LaunchDaemon. Verify the Unix peer UID in each direction; admit only administrators and run a root-owned runtime with no user-writable code or configuration. Forbid concurrent tunnels on the daemon. Do not pass commands, paths, or administrator passwords in the request.
 3. Keep the existing per-session authorization when the service is disabled or pending approval. Add explicit enable, System Settings and unregister actions. When enabled, surface service failure instead of silently prompting for administrator credentials.
 4. Rename the application, menu and disk image without changing the preferences or Keychain identities. Verify both executable architectures, their signatures, daemon plist, and disk image without approving or enabling a system daemon on the user's behalf.
+
+## English and Simplified Chinese
+
+1. Add tests for system-language resolution, persistence, status labels, and localized error rendering.
+2. Store a separate language preference in UserDefaults. Render notices from bilingual values so changing languages refreshes both existing notices and menu commands without replacing the connection model.
+3. Provide a language picker in the window and a checked menu-bar submenu. Localize app labels, validation, and authorization messages; leave profile names, external tool logs, and system dialogs unchanged.
+4. Cross-link the Chinese and English READMEs. Verify the language tests and rebuild the universal installer.

@@ -12,7 +12,7 @@ struct KeychainVPNPasswords: VPNPasswordStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         try check(status)
-        guard let data = result as? Data else { throw VPNError("无法读取钥匙串中的 VPN 密码。") }
+        guard let data = result as? Data else { throw VPNError("Could not read the VPN password from Keychain.", "无法读取钥匙串中的 VPN 密码。") }
         return try? JSONDecoder().decode(VPNCredential.self, from: data)
     }
 
@@ -42,6 +42,6 @@ struct KeychainVPNPasswords: VPNPasswordStore {
     private func check(_ status: OSStatus) throws {
         guard status != errSecSuccess else { return }
         let message = SecCopyErrorMessageString(status, nil) as String? ?? String(status)
-        throw VPNError("无法访问 macOS 钥匙串：\(message)")
+        throw VPNError("Could not access macOS Keychain: \(message)", "无法访问 macOS 钥匙串：\(message)")
     }
 }

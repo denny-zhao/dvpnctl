@@ -2,7 +2,13 @@ import Foundation
 import Combine
 import Darwin
 
+enum WindowTab {
+    case connections
+    case settings
+}
+
 final class ConnectionModel: ObservableObject {
+    @Published var windowTab = WindowTab.connections
     @Published private(set) var profiles: [NamedVPNProfile] = []
     @Published var draft = NamedVPNProfile() {
         didSet {
@@ -15,7 +21,8 @@ final class ConnectionModel: ObservableObject {
     @Published private(set) var status = TunnelStatus.idle
     @Published private(set) var activeProfileName: String?
     @Published private(set) var logs: [String] = []
-    @Published private(set) var notice: String?
+    @Published private(set) var notice: AppText?
+    @Published private(set) var languageChoice = LanguageChoice.load()
     @Published private(set) var backgroundState: BackgroundService.State = .disabled
     @Published private(set) var changingBackgroundService = false
 
@@ -33,12 +40,24 @@ final class ConnectionModel: ObservableObject {
             profiles = try store.load()
             draft = profiles.first ?? NamedVPNProfile()
         } catch {
-            notice = "无法读取 VPN 配置：\(error.localizedDescription)"
+            notice = AppText("Could not load VPN profiles: ", "无法读取 VPN 配置：").appending(.from(error))
         }
         refreshBackgroundState()
     }
 
     var isActive: Bool { session != nil }
+    var language: AppLanguage { languageChoice.resolve() }
+
+    func localized(_ english: String, _ chinese: String) -> String {
+        AppText(english, chinese).render(language)
+    }
+
+    func selectLanguage(_ choice: LanguageChoice) {
+        guard choice != languageChoice else { return }
+        choice.save()
+        languageChoice = choice
+        onStateChanged?()
+    }
 
     func refreshBackgroundState() { backgroundState = background.state }
 
@@ -49,26 +68,27 @@ final class ConnectionModel: ObservableObject {
             let app = Bundle.main.bundleURL
             let helper = app.appendingPathComponent("Contents/MacOS/dFortiClientDaemon")
             guard PrivilegePolicy.isAdministrator(user) else {
-                throw VPNError("请使用本机管理员账户启用 VPN 后台服务。")
+                throw VPNError("Use a local administrator account to enable the VPN background service.", "请使用本机管理员账户启用 VPN 后台服务。")
             }
             guard app.deletingLastPathComponent().path == "/Applications",
                   PrivilegePolicy.canAuthorizeExecutable(at: helper.path, for: user) else {
-                throw VPNError("请从「应用程序」打开 dFortiClient 后再启用后台服务。")
+                throw VPNError("Open dFortiClient from Applications before enabling the background service.", "请从「应用程序」打开 dFortiClient 后再启用后台服务。")
             }
             guard PrivilegePolicy.isProtectedRuntime(at: PrivilegePolicy.backgroundRuntime) else {
-                throw VPNError("请先按安装说明部署受保护的 openfortivpn，再启用后台服务。")
+                throw VPNError("Follow the installation guide to install a protected copy of openfortivpn before enabling the background service.",
+                               "请先按安装说明部署受保护的 openfortivpn，再启用后台服务。")
             }
             try background.enable()
             refreshBackgroundState()
             if backgroundState == .pending {
-                notice = "请在「登录项与扩展」中允许 dFortiClient 在后台运行。"
+                notice = AppText("Allow dFortiClient to run in the background in Login Items & Extensions.", "请在「登录项与扩展」中允许 dFortiClient 在后台运行。")
                 background.openSettings()
             } else {
-                notice = "VPN 后台服务已启用。"
+                notice = AppText("The VPN background service is enabled.", "VPN 后台服务已启用。")
             }
         } catch {
             refreshBackgroundState()
-            notice = "无法启用 VPN 后台服务：\(error.localizedDescription)"
+            notice = AppText("Could not enable the VPN background service: ", "无法启用 VPN 后台服务：").appending(.from(error))
         }
     }
 
@@ -80,8 +100,10 @@ final class ConnectionModel: ObservableObject {
                 guard let self else { return }
                 self.changingBackgroundService = false
                 self.refreshBackgroundState()
-                self.notice = error.map { "无法停用 VPN 后台服务：\($0.localizedDescription)" }
-                    ?? "后台服务已停用。手动连接时将重新请求管理员授权。"
+                self.notice = error.map {
+                    AppText("Could not disable the VPN background service: ", "无法停用 VPN 后台服务：").appending(.from($0))
+                } ?? AppText("The background service is disabled. Manual connections will ask for administrator approval again.",
+                             "后台服务已停用。手动连接时将重新请求管理员授权。")
             }
         }
     }
@@ -112,9 +134,9 @@ final class ConnectionModel: ObservableObject {
             profiles.removeAll { $0.id == saved.id }
             selectProfile(profiles.first?.id)
             onStateChanged?()
-            notice = "已删除配置。"
+            notice = AppText("Profile deleted.", "已删除配置。")
         } catch {
-            notice = error.localizedDescription
+            notice = .from(error)
         }
     }
 
@@ -128,7 +150,7 @@ final class ConnectionModel: ObservableObject {
             draft = profile
             password = ""
         } else if draft.id != profile.id, let failure = notice {
-            notice = "\(failure) 请先保存或放弃当前修改，再选择该配置。"
+            notice = failure.appending(AppText(" Save or discard your changes before selecting this profile.", " 请先保存或放弃当前修改，再选择该配置。"))
         }
         return false
     }
@@ -142,27 +164,31 @@ final class ConnectionModel: ObservableObject {
             } else if let stored = try store.password(for: profile) {
                 secret = stored
             } else {
-                throw VPNError(profile.name.isEmpty ? "请输入 VPN 密码。" : "请为「\(profile.name)」输入 VPN 密码。")
+                if profile.name.isEmpty { throw VPNError("Enter your VPN password.", "请输入 VPN 密码。") }
+                throw VPNError("Enter the VPN password for “\(profile.name)”.", "请为「\(profile.name)」输入 VPN 密码。")
             }
             _ = try profile.settings.configuration(password: secret)
             let user = getuid()
             guard PrivilegePolicy.isAdministrator(user) else {
-                throw VPNError("请从受信任的本机 macOS 管理员账户启动 dFortiClient。")
+                throw VPNError("Run dFortiClient from a trusted local macOS administrator account.", "请从受信任的本机 macOS 管理员账户启动 dFortiClient。")
             }
-            guard let worker = Bundle.main.executableURL else { throw VPNError("找不到 dFortiClient 可执行文件。") }
+            guard let worker = Bundle.main.executableURL else {
+                throw VPNError("The dFortiClient executable could not be found.", "找不到 dFortiClient 可执行文件。")
+            }
             refreshBackgroundState()
             let useBackground = backgroundState == .enabled
             if !useBackground {
                 guard let executable = VPNWorker.findExecutable() else {
-                    throw VPNError("找不到 openfortivpn。请在终端运行 brew install openfortivpn。")
+                    throw VPNError("openfortivpn was not found. Run brew install openfortivpn in Terminal.", "找不到 openfortivpn。请在终端运行 brew install openfortivpn。")
                 }
                 guard PrivilegePolicy.canAuthorizeExecutable(at: worker.path, for: user),
                       PrivilegePolicy.canAuthorizeExecutable(at: executable, for: user) else {
-                    throw VPNError("安装路径的所有者或写权限不受信任。请将应用拖入「应用程序」，并使用可信的 Homebrew 安装。")
+                    throw VPNError("The installation path has untrusted ownership or permissions. Move the app to Applications and use a trusted Homebrew installation.",
+                                   "安装路径的所有者或写权限不受信任。请将应用拖入「应用程序」，并使用可信的 Homebrew 安装。")
                 }
             }
             if saveDraft { try persistDraft() }
-            let request = VPNRequest(profile: profile.settings, password: secret)
+            let request = VPNRequest(profile: profile.settings, password: secret, language: language)
             let current = AuthorizationSession()
             session = current
             isPersistent = profile.settings.keepConnected
@@ -180,7 +206,7 @@ final class ConnectionModel: ObservableObject {
             }
             return true
         } catch {
-            notice = error.localizedDescription
+            notice = .from(error)
             return false
         }
     }
@@ -196,9 +222,11 @@ final class ConnectionModel: ObservableObject {
         do {
             try persistDraft()
             if draft.remembersPassword { password = "" }
-            notice = draft.remembersPassword ? "配置已保存，密码存于 macOS 钥匙串。" : "配置已保存，未保存密码。"
+            notice = draft.remembersPassword
+                ? AppText("Profile saved. The password is stored in macOS Keychain.", "配置已保存，密码存于 macOS 钥匙串。")
+                : AppText("Profile saved without its password.", "配置已保存，未保存密码。")
         } catch {
-            notice = error.localizedDescription
+            notice = .from(error)
         }
     }
 

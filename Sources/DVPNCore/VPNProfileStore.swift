@@ -52,11 +52,11 @@ struct VPNProfileStore {
         profile.name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !profile.name.isEmpty, profile.name.count <= 80,
               profile.name.rangeOfCharacter(from: .controlCharacters.union(.newlines)) == nil else {
-            throw VPNError("请输入 1–80 个字符的配置名称，不要包含控制字符。")
+            throw VPNError("Enter a profile name of 1–80 characters without control characters.", "请输入 1–80 个字符的配置名称，不要包含控制字符。")
         }
         var profiles = try load()
         guard !profiles.contains(where: { $0.id != profile.id && $0.name.caseInsensitiveCompare(profile.name) == .orderedSame }) else {
-            throw VPNError("已有同名 VPN 配置，请换一个名称。")
+            throw VPNError("A VPN profile with this name already exists. Choose a different name.", "已有同名 VPN 配置，请换一个名称。")
         }
         let index = profiles.firstIndex { $0.id == profile.id }
         let previous = index.map { profiles[$0] }
@@ -69,7 +69,7 @@ struct VPNProfileStore {
                 let credential = VPNCredential(target: profile.settings.loginTarget, password: password)
                 try passwords.write(credential, for: profile.id)
             } else if try self.password(for: profile) == nil {
-                throw VPNError("请输入此配置的 VPN 密码后再保存到钥匙串。")
+                throw VPNError("Enter this profile's VPN password before saving it to Keychain.", "请输入此配置的 VPN 密码后再保存到钥匙串。")
             }
         } else if previous?.remembersPassword == true {
             try passwords.remove(for: profile.id)
