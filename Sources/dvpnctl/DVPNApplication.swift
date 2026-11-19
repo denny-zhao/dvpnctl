@@ -1,30 +1,9 @@
 import AppKit
-import Darwin
 import SwiftUI
 
 @main
 enum DVPNApplication {
     static func main() {
-        let arguments = CommandLine.arguments
-        if arguments.dropFirst().first == "--vpn-worker" {
-            guard geteuid() == 0, arguments.count == 4, let user = uid_t(arguments[3]),
-                  PrivilegePolicy.isAdministrator(user) else { exit(64) }
-            do {
-                let socket = try LocalSocket.connect(path: arguments[2], expectedUser: user)
-                let executable = VPNWorker.findExecutable()
-                if let executable, !PrivilegePolicy.canAuthorizeExecutable(at: executable, for: user) {
-                    let request = try? socket.readRequest()
-                    let message = AppText("dFortiClient: The openfortivpn installation path is not trusted.",
-                                          "dFortiClient: openfortivpn 的安装路径不受信任。")
-                    try? socket.send(Data((message.render(request?.language ?? .english) + "\n").utf8))
-                    exit(1)
-                }
-                exit(VPNWorker.run(socket: socket, executable: executable))
-            } catch {
-                exit(1)
-            }
-        }
-
         let app = NSApplication.shared
         let delegate = MenuBarController()
         app.setActivationPolicy(.accessory)
@@ -113,7 +92,6 @@ private final class MenuBarController: NSObject, NSApplicationDelegate, NSWindow
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        model.refreshBackgroundState()
         refreshStatus()
     }
 
@@ -161,7 +139,6 @@ private final class MenuBarController: NSObject, NSApplicationDelegate, NSWindow
     }
 
     @objc private func showWindow() {
-        model.refreshBackgroundState()
         if window == nil {
             let panel = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 645, height: 695),
                                        styleMask: [.titled, .closable, .miniaturizable, .resizable],

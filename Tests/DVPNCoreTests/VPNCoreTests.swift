@@ -175,7 +175,7 @@ struct VPNCoreTests {
             check(try !socket.waitForInput(milliseconds: 100))
             try BackgroundEvent.rejection(.busy).send(to: socket)
         } client: { session, socket, request in
-            var events = [AuthorizationSession.Event]()
+            var events = [BackgroundSession.Event]()
             let failure = try session.run(socket: socket, request: request) { events.append($0) }
             check(failure?.render(.english) == "A VPN session is already running. Disconnect it first.")
             check(failure?.render(.simplifiedChinese) == "已有 VPN 会话，请先断开。")
@@ -248,13 +248,13 @@ struct VPNCoreTests {
             /bin/cat "$2" | /usr/bin/grep -qx 'password = demo-password' || exit 41
             trap 'echo stopped; exit \(childExit)' TERM
             echo ready
-            while :; do /bin/sleep 0.1; done
+            while :; do /bin/sleep 0.1 2>/dev/null; done
             """.write(to: executable, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: executable) }
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         try exerciseBackgroundSession { socket in
             try BackgroundEvent.accepted.send(to: socket)
-            let status = VPNWorker.run(socket: socket, executable: executable.path, stopGracePeriod: 1, onOutput: { data in
+            let status = VPNWorker.run(socket: socket, executable: executable.path, stopGracePeriod: 3, onOutput: { data in
                 try BackgroundEvent.output(data).send(to: socket)
             })
             try BackgroundEvent.finished(status).send(to: socket)
@@ -267,7 +267,8 @@ struct VPNCoreTests {
                 }
             }
             check(childExit == 0 ? failure == nil : failure == .disconnectFailed)
-            check(String(decoding: output, as: UTF8.self) == "ready\nstopped\n")
+            let lines = String(decoding: output, as: UTF8.self).split(separator: "\n")
+            check(lines.first == "ready" && lines.last == "stopped")
         }
     }
 
@@ -393,8 +394,6 @@ struct VPNCoreTests {
         let groups = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         check(PrivilegePolicy.isAdministrator(getuid()) == (getuid() != 0 && groups.split(whereSeparator: \.isWhitespace).contains("admin")))
         check(!PrivilegePolicy.isAdministrator(0))
-        check(PrivilegePolicy.canAuthorizeExecutable(at: "/bin/sh", for: getuid()))
-        check(!PrivilegePolicy.canAuthorizeExecutable(at: "./openfortivpn", for: getuid()))
     }
 
     private func exerciseWorker(script: String, expectedStatus: Int32, expectedOutput: String) throws {

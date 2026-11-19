@@ -1,0 +1,14 @@
+dFortiClient ships OpenFortiVPN as a separate executable linked with OpenSSL.
+
+OpenFortiVPN 1.24.1: GPL-3.0-or-later with the OpenSSL exception.
+The included source archive contains LICENSE and LICENSE.OpenSSL.
+Upstream: https://github.com/adrienverge/openfortivpn/tree/v1.24.1
+
+OpenSSL 3.5.9: Apache License 2.0. The included source archive contains
+LICENSE.txt and NOTICE.txt.
+Upstream: https://github.com/openssl/openssl/tree/openssl-3.5.9
+
+The two archives and build-vpn-runtime.sh reproduce the shipped executable.
+Run the script with an output path, arm64 or x86_64, 13.0, and the absolute
+path to a local directory containing the archives. The universal executable
+combines both slices with lipo -create.

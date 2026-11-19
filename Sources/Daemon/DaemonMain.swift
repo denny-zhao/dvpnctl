@@ -53,7 +53,7 @@ enum DaemonMain {
         }
         guard (try? BackgroundEvent.accepted.send(to: socket)) != nil else { return }
         var replyIntact = true
-        let status = VPNWorker.run(socket: socket, executable: executable, protectedRuntime: true,
+        let status = VPNWorker.run(socket: socket, executable: executable,
                                    shouldStop: { shutdown.isStopped }, onOutput: { data in
             do { try BackgroundEvent.output(data).send(to: socket) }
             catch {

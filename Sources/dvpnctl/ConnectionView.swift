@@ -169,27 +169,6 @@ struct ConnectionView: View {
             }
             .disabled(model.isActive)
 
-            GroupBox {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(localized("VPN background service", "VPN 后台服务") + " · " + model.backgroundState.title.render(model.language))
-                            .font(.headline)
-                        Text(localized("Approve once to connect without repeated administrator prompts.", "管理员首次批准后，手动连接无需逐次输入系统密码。"))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    switch model.backgroundState {
-                    case .disabled, .unavailable:
-                        Button(localized("Enable…", "启用…"), action: model.enableBackgroundService)
-                    case .pending, .enabled:
-                        Button(localized("System Settings…", "系统设置…"), action: model.openBackgroundSettings)
-                        Button(localized("Disable", "停用"), action: model.disableBackgroundService)
-                    }
-                }
-                .padding(8)
-            }
-            .disabled(model.isActive || model.changingBackgroundService)
-
             HStack {
                 if let notice = model.notice {
                     Text(notice.render(model.language)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
@@ -201,7 +180,6 @@ struct ConnectionView: View {
                     else { model.connect() }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.changingBackgroundService)
             }
 
             VStack(alignment: .leading, spacing: 7) {

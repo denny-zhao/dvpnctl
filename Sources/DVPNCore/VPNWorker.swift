@@ -4,17 +4,8 @@ import Foundation
 enum VPNWorker {
     static let shutdownTimedOut: Int32 = 75
 
-    static func findExecutable() -> String? {
-        #if arch(arm64)
-        let paths = ["/opt/homebrew/bin/openfortivpn", "/usr/local/bin/openfortivpn"]
-        #else
-        let paths = ["/usr/local/bin/openfortivpn", "/opt/homebrew/bin/openfortivpn"]
-        #endif
-        return paths.first(where: FileManager.default.isExecutableFile(atPath:))
-    }
-
-    static func run(socket: LocalSocket, executable: String?, stopGracePeriod: TimeInterval = 20,
-                    protectedRuntime: Bool = false, shouldStop: () -> Bool = { false },
+    static func run(socket: LocalSocket, executable: String, stopGracePeriod: TimeInterval = 20,
+                    shouldStop: () -> Bool = { false },
                     onOutput: ((Data) throws -> Void)? = nil) -> Int32 {
         let emit = onOutput ?? socket.send
         var language = AppLanguage.english
@@ -23,11 +14,8 @@ enum VPNWorker {
             language = request.language ?? .english
             if shouldStop() { return 0 }
             let config = try request.profile.configuration(password: request.password)
-            guard let executable else {
-                throw VPNError("openfortivpn was not found. Run brew install openfortivpn first.", "找不到 openfortivpn。请先运行 brew install openfortivpn。")
-            }
             return try supervise(socket: socket, executable: executable, config: Data(config.utf8),
-                                 stopGracePeriod: stopGracePeriod, protectedRuntime: protectedRuntime,
+                                 stopGracePeriod: stopGracePeriod,
                                  language: language, shouldStop: shouldStop, emit: emit)
         } catch {
             try? emit(Data("dFortiClient: \(AppText.from(error).render(language))\n".utf8))
@@ -36,7 +24,7 @@ enum VPNWorker {
     }
 
     private static func supervise(socket: LocalSocket, executable: String, config: Data,
-                                  stopGracePeriod: TimeInterval, protectedRuntime: Bool, language: AppLanguage,
+                                  stopGracePeriod: TimeInterval, language: AppLanguage,
                                   shouldStop: () -> Bool,
                                   emit: (Data) throws -> Void) throws -> Int32 {
         let configuration = Pipe()
@@ -51,15 +39,10 @@ enum VPNWorker {
         let child = Process()
         child.executableURL = URL(fileURLWithPath: executable)
         child.currentDirectoryURL = URL(fileURLWithPath: "/")
-        var environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C"]
-        if protectedRuntime {
-            environment["OPENSSL_CONF"] = "/dev/null"
-            environment["OPENSSL_MODULES"] = "/var/empty"
-            environment["OPENSSL_ENGINES"] = "/var/empty"
-            environment["SSL_CERT_FILE"] = "/etc/ssl/cert.pem"
-            environment["SSL_CERT_DIR"] = "/var/empty"
-        }
-        child.environment = environment
+        child.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C",
+                             "OPENSSL_CONF": "/dev/null", "OPENSSL_MODULES": "/var/empty",
+                             "OPENSSL_ENGINES": "/var/empty", "SSL_CERT_FILE": "/etc/ssl/cert.pem",
+                             "SSL_CERT_DIR": "/var/empty"]
         child.arguments = ["-c", "/dev/fd/0"]
         child.standardInput = configuration.fileHandleForReading
         child.standardOutput = output

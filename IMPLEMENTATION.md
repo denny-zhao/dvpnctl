@@ -25,3 +25,10 @@
 2. Store a separate language preference in UserDefaults. Render notices from bilingual values so changing languages refreshes both existing notices and menu commands without replacing the connection model.
 3. Provide a language picker in the window and a checked menu-bar submenu. Localize app labels, validation, and authorization messages; leave profile names, external tool logs, and system dialogs unchanged.
 4. Cross-link the Chinese and English READMEs. Verify the language tests and rebuild the universal installer.
+
+## Self-contained installer
+
+1. Verify the DMG contains one Installer package and the package contains the app, protected VPN executable, and system LaunchDaemon.
+2. Make `make dmg` build pinned OpenFortiVPN and OpenSSL sources with the macOS toolchain only, then sign and package a root-owned payload. The installer registers the on-demand daemon after administrator approval.
+3. Keep only the daemon connection path. Preserve profiles and Keychain identifiers, provide actionable service status, and document upgrades, signing, and uninstallation in both languages.
+4. Build from a clean project copy without Homebrew in PATH. Expand the package to inspect paths, ownership, architecture, and dynamic dependencies without installing it on the host.

@@ -27,7 +27,8 @@ enum BackgroundRejection: String, CaseIterable {
         case .busy:
             return AppText("A VPN session is already running. Disconnect it first.", rawValue)
         case .runtimeRequired:
-            return AppText("The background service requires an administrator to install a protected copy of openfortivpn. See the installation guide.", rawValue)
+            return AppText("The installed VPN runtime is missing or untrusted. Reinstall dFortiClient from its package.",
+                           "VPN 运行组件缺失或权限不正确，请通过安装包重新安装 dFortiClient。")
         }
     }
 }
@@ -49,9 +50,16 @@ final class SessionCancellation {
     }
 }
 
-struct BackgroundSession {
-    static let label = "local.it-admin.dvpnctl.vpn-service"
+final class BackgroundSession {
+    enum Event {
+        case authorized
+        case output(Data)
+        case finished(AppText?)
+    }
+
+    static let label = "local.it-admin.dvpnctl.installed-vpn-service"
     static let socketPath = "/var/run/\(label).sock"
+    static let servicePlist = "/Library/LaunchDaemons/\(label).plist"
     let cancellation: SessionCancellation
 
     init(cancellation: SessionCancellation = SessionCancellation()) {
@@ -60,19 +68,32 @@ struct BackgroundSession {
 
     func stop() { cancellation.stop() }
 
-    func run(request: VPNRequest, report: (AuthorizationSession.Event) -> Void) throws -> AppText? {
+    func start(request: VPNRequest, report: @escaping (Event) -> Void) {
+        DispatchQueue(label: Self.label + ".client", qos: .userInitiated).async {
+            let failure: AppText?
+            do { failure = try self.run(request: request, report: report) }
+            catch { failure = .from(error) }
+            report(.finished(failure))
+        }
+    }
+
+    private func run(request: VPNRequest, report: (Event) -> Void) throws -> AppText? {
         if cancellation.isStopped { return nil }
+        guard FileManager.default.fileExists(atPath: Self.servicePlist) else {
+            throw VPNError("Install dFortiClient.pkg from the disk image to set up the VPN service.",
+                           "请运行磁盘映像内的 dFortiClient.pkg 以安装 VPN 服务。")
+        }
         let socket: LocalSocket
         do {
             socket = try LocalSocket.connect(path: Self.socketPath, expectedUser: 0)
         } catch {
-            throw VPNError("Could not reach the VPN background service. Check Login Items & Extensions, or disable and re-enable the service if you just upgraded.",
-                           "无法连接已启用的 VPN 后台服务。请检查「登录项与扩展」；若刚升级，请停用后重新启用。")
+            throw VPNError("Could not reach the VPN background service. Check Login Items & Extensions, or reinstall dFortiClient from its package.",
+                           "无法连接 VPN 后台服务。请检查「登录项与扩展」，或通过安装包重新安装 dFortiClient。")
         }
         return try run(socket: socket, request: request, report: report)
     }
 
-    func run(socket: LocalSocket, request: VPNRequest, report: (AuthorizationSession.Event) -> Void) throws -> AppText? {
+    func run(socket: LocalSocket, request: VPNRequest, report: (Event) -> Void) throws -> AppText? {
         defer { socket.endInput() }
         let admissionDeadline = ProcessInfo.processInfo.systemUptime + 5
         var stopDeadline: TimeInterval?

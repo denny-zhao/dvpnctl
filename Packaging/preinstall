@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+target=${3:-/}
+target=${target%/}
+if [ -z "$target" ]; then
+    for service in local.it-admin.dvpnctl.vpn-service local.it-admin.dvpnctl.installed-vpn-service; do
+        if /bin/launchctl print "system/$service" >/dev/null 2>&1; then
+            /bin/launchctl bootout "system/$service"
+        fi
+    done
+fi

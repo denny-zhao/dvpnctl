@@ -76,12 +76,11 @@ struct VPNError: LocalizedError {
 }
 
 enum TunnelStatus {
-    case idle, authorizing, connecting, connected, reconnecting, disconnecting
+    case idle, connecting, connected, reconnecting, disconnecting
 
     var title: AppText {
         switch self {
         case .idle: return AppText("Disconnected", "未连接")
-        case .authorizing: return AppText("Awaiting administrator approval", "等待管理员授权")
         case .connecting: return AppText("Connecting", "正在连接")
         case .connected: return AppText("Connected", "已连接")
         case .reconnecting: return AppText("Waiting to reconnect", "等待重连")

@@ -23,14 +23,11 @@ final class ConnectionModel: ObservableObject {
     @Published private(set) var logs: [String] = []
     @Published private(set) var notice: AppText?
     @Published private(set) var languageChoice = LanguageChoice.load()
-    @Published private(set) var backgroundState: BackgroundService.State = .disabled
-    @Published private(set) var changingBackgroundService = false
 
     var onStateChanged: (() -> Void)?
     var onSessionEnded: (() -> Void)?
     private let store: VPNProfileStore
-    private let background = BackgroundService()
-    private var session: AuthorizationSession?
+    private var session: BackgroundSession?
     private var isPersistent = false
     private var pendingLog = Data()
 
@@ -42,7 +39,6 @@ final class ConnectionModel: ObservableObject {
         } catch {
             notice = AppText("Could not load VPN profiles: ", "无法读取 VPN 配置：").appending(.from(error))
         }
-        refreshBackgroundState()
     }
 
     var isActive: Bool { session != nil }
@@ -59,56 +55,6 @@ final class ConnectionModel: ObservableObject {
         onStateChanged?()
     }
 
-    func refreshBackgroundState() { backgroundState = background.state }
-
-    func enableBackgroundService() {
-        guard !isActive, !changingBackgroundService else { return }
-        do {
-            let user = getuid()
-            let app = Bundle.main.bundleURL
-            let helper = app.appendingPathComponent("Contents/MacOS/dFortiClientDaemon")
-            guard PrivilegePolicy.isAdministrator(user) else {
-                throw VPNError("Use a local administrator account to enable the VPN background service.", "请使用本机管理员账户启用 VPN 后台服务。")
-            }
-            guard app.deletingLastPathComponent().path == "/Applications",
-                  PrivilegePolicy.canAuthorizeExecutable(at: helper.path, for: user) else {
-                throw VPNError("Open dFortiClient from Applications before enabling the background service.", "请从「应用程序」打开 dFortiClient 后再启用后台服务。")
-            }
-            guard PrivilegePolicy.isProtectedRuntime(at: PrivilegePolicy.backgroundRuntime) else {
-                throw VPNError("Follow the installation guide to install a protected copy of openfortivpn before enabling the background service.",
-                               "请先按安装说明部署受保护的 openfortivpn，再启用后台服务。")
-            }
-            try background.enable()
-            refreshBackgroundState()
-            if backgroundState == .pending {
-                notice = AppText("Allow dFortiClient to run in the background in Login Items & Extensions.", "请在「登录项与扩展」中允许 dFortiClient 在后台运行。")
-                background.openSettings()
-            } else {
-                notice = AppText("The VPN background service is enabled.", "VPN 后台服务已启用。")
-            }
-        } catch {
-            refreshBackgroundState()
-            notice = AppText("Could not enable the VPN background service: ", "无法启用 VPN 后台服务：").appending(.from(error))
-        }
-    }
-
-    func disableBackgroundService() {
-        guard !isActive, !changingBackgroundService else { return }
-        changingBackgroundService = true
-        background.disable { [weak self] error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.changingBackgroundService = false
-                self.refreshBackgroundState()
-                self.notice = error.map {
-                    AppText("Could not disable the VPN background service: ", "无法停用 VPN 后台服务：").appending(.from($0))
-                } ?? AppText("The background service is disabled. Manual connections will ask for administrator approval again.",
-                             "后台服务已停用。手动连接时将重新请求管理员授权。")
-            }
-        }
-    }
-
-    func openBackgroundSettings() { background.openSettings() }
     var savedDraft: NamedVPNProfile? { profiles.first { $0.id == draft.id } }
     var hasUnsavedChanges: Bool {
         if !password.isEmpty { return true }
@@ -156,7 +102,7 @@ final class ConnectionModel: ObservableObject {
     }
 
     private func connectProfile(_ profile: NamedVPNProfile, enteredPassword: String, saveDraft: Bool) -> Bool {
-        guard !isActive, !changingBackgroundService else { return false }
+        guard !isActive else { return false }
         do {
             let secret: String
             if !enteredPassword.isEmpty {
@@ -172,24 +118,9 @@ final class ConnectionModel: ObservableObject {
             guard PrivilegePolicy.isAdministrator(user) else {
                 throw VPNError("Run dFortiClient from a trusted local macOS administrator account.", "请从受信任的本机 macOS 管理员账户启动 dFortiClient。")
             }
-            guard let worker = Bundle.main.executableURL else {
-                throw VPNError("The dFortiClient executable could not be found.", "找不到 dFortiClient 可执行文件。")
-            }
-            refreshBackgroundState()
-            let useBackground = backgroundState == .enabled
-            if !useBackground {
-                guard let executable = VPNWorker.findExecutable() else {
-                    throw VPNError("openfortivpn was not found. Run brew install openfortivpn in Terminal.", "找不到 openfortivpn。请在终端运行 brew install openfortivpn。")
-                }
-                guard PrivilegePolicy.canAuthorizeExecutable(at: worker.path, for: user),
-                      PrivilegePolicy.canAuthorizeExecutable(at: executable, for: user) else {
-                    throw VPNError("The installation path has untrusted ownership or permissions. Move the app to Applications and use a trusted Homebrew installation.",
-                                   "安装路径的所有者或写权限不受信任。请将应用拖入「应用程序」，并使用可信的 Homebrew 安装。")
-                }
-            }
             if saveDraft { try persistDraft() }
             let request = VPNRequest(profile: profile.settings, password: secret, language: language)
-            let current = AuthorizationSession()
+            let current = BackgroundSession()
             session = current
             isPersistent = profile.settings.keepConnected
             activeProfileName = saveDraft ? draft.name : profile.name
@@ -197,8 +128,8 @@ final class ConnectionModel: ObservableObject {
             logs = []
             pendingLog.removeAll()
             notice = nil
-            setStatus(useBackground ? .connecting : .authorizing)
-            current.start(request: request, worker: worker, useBackground: useBackground) { [weak self, weak current] event in
+            setStatus(.connecting)
+            current.start(request: request) { [weak self, weak current] event in
                 DispatchQueue.main.async {
                     guard let self, let current, self.session === current else { return }
                     self.receive(event)
@@ -240,7 +171,7 @@ final class ConnectionModel: ObservableObject {
         onStateChanged?()
     }
 
-    private func receive(_ event: AuthorizationSession.Event) {
+    private func receive(_ event: BackgroundSession.Event) {
         switch event {
         case .authorized:
             if status != .disconnecting { setStatus(.connecting) }

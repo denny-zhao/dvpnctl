@@ -2,8 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key><string>local.it-admin.dvpnctl.vpn-service</string>
-    <key>BundleProgram</key><string>Contents/MacOS/dFortiClientDaemon</string>
+    <key>Label</key><string>local.it-admin.dvpnctl.installed-vpn-service</string>
+    <key>ProgramArguments</key>
+    <array><string>/Library/Application Support/dFortiClient/dFortiClientDaemon</string></array>
     <key>AssociatedBundleIdentifiers</key>
     <array><string>local.it-admin.dvpnctl</string></array>
     <key>ExitTimeOut</key><integer>30</integer>
@@ -12,7 +13,7 @@
     <dict>
         <key>VPNControl</key>
         <dict>
-            <key>SockPathName</key><string>/var/run/local.it-admin.dvpnctl.vpn-service.sock</string>
+            <key>SockPathName</key><string>/var/run/local.it-admin.dvpnctl.installed-vpn-service.sock</string>
             <key>SockPathOwner</key><integer>0</integer>
             <key>SockPathGroup</key><integer>80</integer>
             <key>SockPathMode</key><integer>432</integer>

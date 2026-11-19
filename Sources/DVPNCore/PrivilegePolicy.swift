@@ -38,23 +38,4 @@ enum PrivilegePolicy {
         return groups.prefix(Int(count)).contains(Int32(admin))
     }
 
-    static func canAuthorizeExecutable(at path: String, for user: uid_t) -> Bool {
-        guard path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path),
-              let admin = getgrnam("admin")?.pointee.gr_gid else { return false }
-        let executable = URL(fileURLWithPath: path).standardizedFileURL
-        for candidate in [executable, executable.resolvingSymlinksInPath()] {
-            var location = candidate
-            while true {
-                var details = stat()
-                guard lstat(location.path, &details) == 0, details.st_uid == 0 || details.st_uid == user else { return false }
-                if details.st_mode & S_IFMT != S_IFLNK {
-                    guard details.st_mode & S_IWOTH == 0,
-                          details.st_mode & S_IWGRP == 0 || details.st_gid == admin || details.st_gid == 0 else { return false }
-                }
-                if location.path == "/" { break }
-                location.deleteLastPathComponent()
-            }
-        }
-        return true
-    }
 }

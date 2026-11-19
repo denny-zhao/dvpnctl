@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+target=${3:-/}
+target=${target%/}
+label=local.it-admin.dvpnctl.installed-vpn-service
+if [ -z "$target" ]; then
+    for path in /Library '/Library/Application Support' '/Library/Application Support/dFortiClient' \
+        '/Library/Application Support/dFortiClient/dFortiClientDaemon' \
+        '/Library/Application Support/dFortiClient/openfortivpn' /Library/LaunchDaemons \
+        "/Library/LaunchDaemons/$label.plist"; do
+        [ ! -L "$path" ] && [ "$(/usr/bin/stat -f '%u' "$path")" = 0 ] || exit 1
+        mode=$(/usr/bin/stat -f '%OLp' "$path")
+        [ "$((0$mode & 022))" -eq 0 ] || exit 1
+        [ "$(/bin/ls -lde "$path" | /usr/bin/wc -l)" -eq 1 ] || exit 1
+    done
+    disabled=$(/bin/launchctl print-disabled system)
+    if printf '%s\n' "$disabled" | /usr/bin/grep -Eq "\"$label\"[[:space:]]*=>[[:space:]]*(disabled|true)"; then
+        exit 0
+    fi
+    /bin/launchctl bootstrap system "/Library/LaunchDaemons/$label.plist"
+fi

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>dFortiClient</title>
+    <options customize="never" require-scripts="false" hostArchitectures="@HOST_ARCHITECTURES@"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <allowed-os-versions>
+        <os-version min="@MIN_MACOS@"/>
+    </allowed-os-versions>
+    <choices-outline><line choice="dFortiClient"/></choices-outline>
+    <choice id="dFortiClient" visible="false">
+        <pkg-ref id="local.it-admin.dvpnctl.installer"/>
+    </choice>
+    <pkg-ref id="local.it-admin.dvpnctl.installer">dFortiClient-payload.pkg</pkg-ref>
+    <pkg-ref id="local.it-admin.dvpnctl.installer">
+        <must-close><app id="local.it-admin.dvpnctl"/></must-close>
+    </pkg-ref>
+</installer-gui-script>
