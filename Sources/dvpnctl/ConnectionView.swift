@@ -69,6 +69,20 @@ struct MainWindowView: View {
                 }
                 .padding(8)
             }
+            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                GroupBox {
+                    HStack {
+                        Text(model.localized("Version", "版本"))
+                        Spacer()
+                        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+                        Text(build.map { model.localized("\(version) (build \($0))", "\(version)（构建 \($0)）") } ?? version)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .textSelection(.enabled)
+                    }
+                    .padding(8)
+                }
+            }
             Spacer(minLength: 0)
         }
         .padding(16)
