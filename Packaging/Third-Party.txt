@@ -8,7 +8,9 @@ OpenSSL 3.5.9: Apache License 2.0. The included source archive contains
 LICENSE.txt and NOTICE.txt.
 Upstream: https://github.com/openssl/openssl/tree/openssl-3.5.9
 
-The two archives and build-vpn-runtime.sh reproduce the shipped executable.
+The bundled OpenFortiVPN is modified for macOS system DNS. The patch and
+macos-vpn-dns.c/.h and ipv4-dns.c/.h use the same license and exception.
+Keep these files alongside build-vpn-runtime.sh to reproduce the executable.
 Run the script with an output path, arm64 or x86_64, 13.0, and the absolute
 path to a local directory containing the archives. The universal executable
 combines both slices with lipo -create.

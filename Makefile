@@ -16,6 +16,8 @@ PKG_ROOT = .build/installer-root
 PKG_SCRIPTS = .build/installer-scripts
 SUPPORT = Library/Application Support/dFortiClient
 ARCHIVES = .build/sources
+VPN_RUNTIME_SOURCES = scripts/build-vpn-runtime.sh scripts/openfortivpn-macos-dns.patch \
+	scripts/macos-vpn-dns.c scripts/macos-vpn-dns.h scripts/ipv4-dns.c scripts/ipv4-dns.h
 VERSION = $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
 SIGN_ID ?= -
 SIGN_OPTIONS ?= --options runtime
@@ -71,7 +73,7 @@ dmg: pkg
 	mkdir -p "$(DMG_STAGE)/Third-Party Sources"
 	install -m 644 "$(PKG)" "$(DMG_STAGE)/$(NAME).pkg"
 	install -m 644 "$(ARCHIVES)/openfortivpn-1.24.1.tar.gz" "$(ARCHIVES)/openssl-3.5.9.tar.gz" \
-		scripts/build-vpn-runtime.sh "Packaging/Third-Party.txt" "$(DMG_STAGE)/Third-Party Sources"
+		$(VPN_RUNTIME_SOURCES) "Packaging/Third-Party.txt" "$(DMG_STAGE)/Third-Party Sources"
 	hdiutil create -ov -volname "$(NAME)" -srcfolder "$(DMG_STAGE)" -format UDZO "$(DMG)"
 
 install: pkg
@@ -81,8 +83,21 @@ install: pkg
 	mkdir -p .build
 	$(SWIFTC) -parse-as-library -o $@ $(CORE) $(TESTS)
 
-test: .build/core-tests
+.build/macos-vpn-dns-tests: Tests/Packaging/macos-vpn-dns-tests.c scripts/macos-vpn-dns.c scripts/macos-vpn-dns.h scripts/ipv4-dns.h Makefile
+	mkdir -p .build
+	xcrun clang -Wall -Wextra -Werror -I scripts \
+		-DSCDynamicStoreCreate=test_store_create -DSCDynamicStoreAddTemporaryValue=test_store_add \
+		-Dif_nametoindex=test_if_nametoindex -Dsetsockopt=test_setsockopt -Dconnect=test_connect \
+		$< scripts/macos-vpn-dns.c -framework CoreFoundation -framework SystemConfiguration -o "$@"
+
+.build/ipv4-dns-tests: Tests/Packaging/ipv4-dns-tests.c scripts/ipv4-dns.c scripts/ipv4-dns.h Makefile
+	mkdir -p .build
+	xcrun clang -Wall -Wextra -Werror -I scripts $< scripts/ipv4-dns.c -o "$@"
+
+test: .build/core-tests .build/macos-vpn-dns-tests .build/ipv4-dns-tests
 	.build/core-tests
+	.build/macos-vpn-dns-tests
+	.build/ipv4-dns-tests
 
 .build/openfortivpn-universal: .build/openfortivpn-arm64 .build/openfortivpn-x86_64
 	lipo -create -output "$@" $^
@@ -91,7 +106,7 @@ test: .build/core-tests
 	/bin/sh scripts/build-vpn-runtime.sh --download "$(ARCHIVES)"
 	touch "$@"
 
-.build/openfortivpn-%: scripts/build-vpn-runtime.sh Makefile .build/sources/.downloaded
+.build/openfortivpn-%: $(VPN_RUNTIME_SOURCES) Makefile .build/sources/.downloaded
 	mkdir -p .build
 	/bin/sh scripts/build-vpn-runtime.sh "$@" "$*" "$(MIN_MACOS)" "$(ARCHIVES)"
 

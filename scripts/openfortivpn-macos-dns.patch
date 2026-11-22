@@ -1,0 +1,93 @@
+--- a/src/tunnel.c
++++ b/src/tunnel.c
+@@ -29,6 +29,7 @@
+ #include "tunnel.h"
+ #include "http.h"
+ #include "log.h"
++#include "macos-vpn-dns.h"
+ #include "userinput.h"
+ 
+ #include <openssl/err.h>
+@@ -50,6 +51,7 @@
+ #include <fcntl.h>
+ #include <ifaddrs.h>
+ #include <netdb.h>
++#include <pthread.h>
+ #if HAVE_PTY_H
+ #include <pty.h>
+ #elif HAVE_UTIL_H
+@@ -133,8 +135,35 @@
+ 	}
+ 
++	/* The interface and routes are ready even if DNS setup is interrupted. */
++	tunnel->state = STATE_UP;
++
+ 	if (tunnel->config->set_dns) {
+-		log_info("Adding VPN nameservers...\n");
+-		ipv4_add_nameservers_to_resolv_conf(tunnel);
++		int previous_cancel_state;
++		enum macos_vpn_dns_result result;
++
++		/* Keep the temporary record and its session handle together on cancellation. */
++		pthread_testcancel();
++		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel_state);
++		result = macos_vpn_dns_register(&tunnel->macos_dns, tunnel->ppp_iface,
++		                                tunnel->ipv4.ns1_addr, tunnel->ipv4.ns2_addr,
++		                                tunnel->ipv4.dns_suffix);
++		if (result == MACOS_VPN_DNS_REGISTERED)
++			tunnel->macos_ipv4_dns = macos_ipv4_dns_register(tunnel->ppp_iface,
++			                                                tunnel->ipv4.ns1_addr,
++			                                                tunnel->ipv4.ns2_addr);
++		pthread_setcancelstate(previous_cancel_state, NULL);
++
++		if (result == MACOS_VPN_DNS_REGISTERED) {
++			log_info("Registered VPN DNS with macOS.\n");
++			if (tunnel->macos_ipv4_dns != NULL)
++				log_info("Enabled IPv4 for ChatGPT and Codex domains.\n");
++			else
++				log_warn("Could not enable IPv4 for ChatGPT and Codex domains.\n");
++		} else if (result == MACOS_VPN_DNS_NO_ROUTE)
++			log_warn("VPN DNS unavailable: no route to a VPN nameserver via %s.\n",
++			         tunnel->ppp_iface);
++		else if (result == MACOS_VPN_DNS_ERROR)
++			log_warn("Could not register VPN DNS with macOS.\n");
+ 	}
+ 
+ 	log_info("Tunnel is up and running.\n");
+@@ -157,11 +186,6 @@
+ 	if (tunnel->config->set_routes) {
+ 		log_info("Restoring routes...\n");
+ 		ipv4_restore_routes(tunnel);
+-	}
+-
+-	if (tunnel->config->set_dns) {
+-		log_info("Removing VPN nameservers...\n");
+-		ipv4_del_nameservers_from_resolv_conf(tunnel);
+ 	}
+ 
+ 	return 0;
+@@ -1439,6 +1463,13 @@
+ 	io_loop(&tunnel);
+ 
+ 	log_debug("Disconnecting\n");
++	/* Release the temporary DNS sessions before restoring tunnel routes. */
++	macos_ipv4_dns_unregister(tunnel.macos_ipv4_dns);
++	tunnel.macos_ipv4_dns = NULL;
++	if (tunnel.macos_dns != NULL) {
++		macos_vpn_dns_unregister(&tunnel.macos_dns);
++		log_info("Removed VPN DNS from macOS.\n");
++	}
+ 	if (tunnel.state == STATE_UP)
+ 		if (tunnel.on_ppp_if_down != NULL)
+ 			tunnel.on_ppp_if_down(&tunnel);
+--- a/src/tunnel.h
++++ b/src/tunnel.h
+@@ -72,6 +72,8 @@
+ 	SSL	*ssl_handle;
+ 
+ 	struct ipv4_config ipv4;
++	const struct __SCDynamicStore *macos_dns;
++	struct macos_ipv4_dns *macos_ipv4_dns;
+ 
+ 	int (*on_ppp_if_up)(struct tunnel *tunnel);
+ 	int (*on_ppp_if_down)(struct tunnel *tunnel);

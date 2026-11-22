@@ -2,6 +2,7 @@
 set -eu
 
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+script_dir=$(cd "$(dirname "$0")" && pwd)
 case "${1:-}" in
     --download) archives=${2:?Specify the source archive directory} ;;
     *) archives=${4:?Specify the source archive directory} ;;
@@ -64,13 +65,16 @@ fi
 
 tar -xzf "$forti_archive" -C "$scratch"
 cd "$scratch/openfortivpn-$forti_version"
+patch -p1 -i "$script_dir/openfortivpn-macos-dns.patch"
 "$CC" -arch "$arch" -isysroot "$sdk" "-mmacosx-version-min=$deployment_target" -O2 \
     -DHAVE_MACH_MACH_H=1 -DHAVE_STRUCT_TERMIOS=1 -DHAVE_UTIL_H=1 -DHAVE_VDPRINTF=1 \
     -DHAVE_USR_SBIN_PPPD=1 -DLEGACY_PPPD=1 -DUSE_RESOLVCONF=0 \
     '-DSYSCONFDIR="/etc"' '-DPPP_PATH="/usr/sbin/pppd"' '-DNETSTAT_PATH="/usr/sbin/netstat"' \
     '-DREVISION="unavailable"' "-DVERSION=\"$forti_version\"" \
-    -I "$openssl_source/include" src/*.c "$openssl_source/libssl.a" "$openssl_source/libcrypto.a" \
-    -lutil -lpthread -o "$scratch/openfortivpn"
+    -I "$openssl_source/include" -I "$script_dir" src/*.c "$script_dir/macos-vpn-dns.c" \
+    "$script_dir/ipv4-dns.c" \
+    "$openssl_source/libssl.a" "$openssl_source/libcrypto.a" \
+    -framework CoreFoundation -framework SystemConfiguration -lutil -lpthread -o "$scratch/openfortivpn"
 otool -L "$scratch/openfortivpn" |
     awk '/^\t/ && $1 !~ /^\/usr\/lib\// && $1 !~ /^\/System\/Library\// { bad = 1 } END { exit bad }'
 lipo "$scratch/openfortivpn" -verify_arch "$arch"

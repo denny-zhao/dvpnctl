@@ -30,6 +30,9 @@ test -x "$component/Scripts/preinstall"
 test ! -e "$app/Contents/MacOS/dFortiClientDaemon"
 test -f "$volume/Third-Party Sources/openfortivpn-1.24.1.tar.gz"
 test -f "$volume/Third-Party Sources/openssl-3.5.9.tar.gz"
+for source in build-vpn-runtime.sh openfortivpn-macos-dns.patch macos-vpn-dns.c macos-vpn-dns.h ipv4-dns.c ipv4-dns.h; do
+    test -f "$volume/Third-Party Sources/$source"
+done
 plutil -lint "$plist"
 test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist")" = '/Library/Application Support/dFortiClient/dFortiClientDaemon'
 test "$(/usr/libexec/PlistBuddy -c 'Print :Sockets:VPNControl:SockPathName' "$plist")" = /var/run/local.it-admin.dvpnctl.installed-vpn-service.sock
@@ -42,7 +45,11 @@ for executable in "$app/Contents/MacOS/dFortiClient" "$support/dFortiClientDaemo
     codesign --verify --strict --all-architectures "$executable"
 done
 otool -L "$support/openfortivpn" |
-    awk '/^\t/ && $1 !~ /^\/usr\/lib\// && $1 !~ /^\/System\/Library\// { bad = 1 } END { exit bad }'
+    awk '
+        /^\t.*\/SystemConfiguration\.framework\// { system_configuration = 1 }
+        /^\t/ && $1 !~ /^\/usr\/lib\// && $1 !~ /^\/System\/Library\// { bad = 1 }
+        END { exit (bad || !system_configuration) }
+    '
 lsbom -p fmug "$component/Bom" | awk -F '\t' '
     $1 ~ /\/(dFortiClientDaemon|openfortivpn|local\.it-admin\.dvpnctl\.installed-vpn-service\.plist)$/ {
         count++

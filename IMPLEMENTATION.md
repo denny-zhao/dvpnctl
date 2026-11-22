@@ -32,3 +32,15 @@
 2. Make `make dmg` build pinned OpenFortiVPN and OpenSSL sources with the macOS toolchain only, then sign and package a root-owned payload. The installer registers the on-demand daemon after administrator approval.
 3. Keep only the daemon connection path. Preserve profiles and Keychain identifiers, provide actionable service status, and document upgrades, signing, and uninstallation in both languages.
 4. Build from a clean project copy without Homebrew in PATH. Expand the package to inspect paths, ownership, architecture, and dynamic dependencies without installing it on the host.
+
+## VPN DNS on macOS
+
+1. Test the VPN resolver dictionary and its registration and cleanup with a stand-in dynamic store.
+2. Publish temporary DNS state from the packaged OpenFortiVPN runtime when PPP is ready. Release the registration as the tunnel goes down and let macOS remove it if the process exits unexpectedly.
+3. Rebuild the universal DMG and verify that it contains the updated runtime and its corresponding source.
+
+## ChatGPT and Codex on IPv4-only tunnels
+
+1. Test a loopback resolver with a local upstream. Verify IPv4 forwarding, AAAA and HTTPS/SVCB suppression for the matched domains, and rejection of unrelated or malformed queries.
+2. Publish a supplemental resolver for the service domains during the VPN session. Bind forwarded queries to the PPP interface and release the resolver before stopping its local listener.
+3. Verify the DNS policy and cleanup, package both macOS architectures, and compare live HTTPS when the test VPN is available.
