@@ -3,6 +3,7 @@ set -eu
 
 image=${1:?Specify the DMG path}
 arch=${2:-universal}
+archive=$3
 scratch=$(mktemp -d)
 volume="$scratch/volume"
 mkdir "$volume"
@@ -28,11 +29,13 @@ test -x "$support/openfortivpn"
 test -x "$component/Scripts/postinstall"
 test -x "$component/Scripts/preinstall"
 test ! -e "$app/Contents/MacOS/dFortiClientDaemon"
-test -f "$volume/Third-Party Sources/openfortivpn-1.24.1.tar.gz"
+test -f "$volume/Third-Party Sources/$archive"
 test -f "$volume/Third-Party Sources/openssl-3.5.9.tar.gz"
-for source in build-vpn-runtime.sh openfortivpn-macos-dns.patch macos-vpn-dns.c macos-vpn-dns.h ipv4-dns.c ipv4-dns.h; do
+for source in build-vpn-runtime.sh openfortivpn-macos-dns.patch macos-vpn-dns.c macos-vpn-dns.h vpn-dns-proxy.c vpn-dns-proxy.h openfortivpn-source.conf; do
     test -f "$volume/Third-Party Sources/$source"
 done
+test ! -e "$volume/Third-Party Sources/ipv4-dns.c"
+test ! -e "$volume/Third-Party Sources/ipv4-dns.h"
 plutil -lint "$plist"
 test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist")" = '/Library/Application Support/dFortiClient/dFortiClientDaemon'
 test "$(/usr/libexec/PlistBuddy -c 'Print :Sockets:VPNControl:SockPathName' "$plist")" = /var/run/local.it-admin.dvpnctl.installed-vpn-service.sock
@@ -63,5 +66,6 @@ lsbom -p fmug "$component/Bom" | awk -F '\t' '
 '
 if lipo "$support/openfortivpn" -verify_arch "$(uname -m)"; then
     test "$("$support/openfortivpn" --version)" = 1.24.1
+    "$support/openfortivpn" --help | grep -q -- "--ipv6"
 fi
 printf 'Verified installer payload, architectures, signatures, and ownership\n'

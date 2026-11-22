@@ -39,8 +39,21 @@
 2. Publish temporary DNS state from the packaged OpenFortiVPN runtime when PPP is ready. Release the registration as the tunnel goes down and let macOS remove it if the process exits unexpectedly.
 3. Rebuild the universal DMG and verify that it contains the updated runtime and its corresponding source.
 
-## ChatGPT and Codex on IPv4-only tunnels
+## IPv4 preference on IPv4-only tunnels
 
-1. Test a loopback resolver with a local upstream. Verify IPv4 forwarding, AAAA and HTTPS/SVCB suppression for the matched domains, and rejection of unrelated or malformed queries.
-2. Publish a supplemental resolver for the service domains during the VPN session. Bind forwarded queries to the PPP interface and release the resolver before stopping its local listener.
-3. Verify the DNS policy and cleanup, package both macOS architectures, and compare live HTTPS when the test VPN is available.
+1. Save the opt-in setting with each VPN profile. Apply it during sessions where PPP owns the IPv4 default route and the VPN has no working IPv6 default route or IPv6 DNS server.
+2. Publish a temporary macOS resolver for the loopback proxy. Bind upstream queries to PPP and release the resolver before stopping the listener.
+3. For ordinary AAAA queries, prefer IPv4 when the upstream confirms both address families. Preserve IPv6-only answers, DNSSEC queries, and HTTPS/SVCB records.
+4. Verify profile persistence, DNS behavior, session cleanup, and the universal installer.
+
+## Native IPv6 for OpenFortiVPN
+
+1. Keep the protocol and PPP changes in the independent OpenFortiVPN fork.
+   Request dual-stack configuration, parse assigned IPv6 addresses, DNS, and
+   split routes, and preserve compatibility with IPv4-only gateways.
+2. Negotiate IPv6CP with pppd. Install the assigned address and effective IPv6
+   routes when PPP is ready, and remove session-owned state on teardown.
+3. Package a checksum-verified fork revision and register VPN-provided IPv6 DNS
+   when it is reachable through the tunnel.
+4. Run protocol and route-policy fixtures, build the universal DMG, and
+   distinguish local tests from actual FortiGate IPv6 traffic validation.

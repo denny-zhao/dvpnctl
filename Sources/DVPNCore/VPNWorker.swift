@@ -16,6 +16,7 @@ enum VPNWorker {
             let config = try request.profile.configuration(password: request.password)
             return try supervise(socket: socket, executable: executable, config: Data(config.utf8),
                                  stopGracePeriod: stopGracePeriod,
+                                 preferIPv4: request.profile.preferIPv4 == true,
                                  language: language, shouldStop: shouldStop, emit: emit)
         } catch {
             try? emit(Data("dFortiClient: \(AppText.from(error).render(language))\n".utf8))
@@ -24,7 +25,7 @@ enum VPNWorker {
     }
 
     private static func supervise(socket: LocalSocket, executable: String, config: Data,
-                                  stopGracePeriod: TimeInterval, language: AppLanguage,
+                                  stopGracePeriod: TimeInterval, preferIPv4: Bool, language: AppLanguage,
                                   shouldStop: () -> Bool,
                                   emit: (Data) throws -> Void) throws -> Int32 {
         let configuration = Pipe()
@@ -39,11 +40,13 @@ enum VPNWorker {
         let child = Process()
         child.executableURL = URL(fileURLWithPath: executable)
         child.currentDirectoryURL = URL(fileURLWithPath: "/")
-        child.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C",
-                             "OPENSSL_CONF": "/dev/null", "OPENSSL_MODULES": "/var/empty",
-                             "OPENSSL_ENGINES": "/var/empty", "SSL_CERT_FILE": "/etc/ssl/cert.pem",
-                             "SSL_CERT_DIR": "/var/empty"]
-        child.arguments = ["-c", "/dev/fd/0"]
+        var environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C",
+                           "OPENSSL_CONF": "/dev/null", "OPENSSL_MODULES": "/var/empty",
+                           "OPENSSL_ENGINES": "/var/empty", "SSL_CERT_FILE": "/etc/ssl/cert.pem",
+                           "SSL_CERT_DIR": "/var/empty"]
+        if preferIPv4 { environment["DFORTICLIENT_PREFER_IPV4"] = "1" }
+        child.environment = environment
+        child.arguments = ["--ipv6", "-c", "/dev/fd/0"]
         child.standardInput = configuration.fileHandleForReading
         child.standardOutput = output
         child.standardError = output

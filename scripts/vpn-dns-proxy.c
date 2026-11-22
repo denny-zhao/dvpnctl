@@ -1,6 +1,7 @@
 /* GPL-3.0-or-later with the OpenFortiVPN exception in LICENSE.OpenSSL. */
-#include "ipv4-dns.h"
+#include "vpn-dns-proxy.h"
 
+#include <arpa/nameser.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -13,28 +14,21 @@
 #include <time.h>
 #include <unistd.h>
 
-const char *const ipv4_dns_domains[] = {
-    "chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com", NULL,
-};
-
 enum {
     DNS_HEADER_SIZE = 12,
     DNS_MAX_PACKET = UINT16_MAX,
     DNS_IO_TIMEOUT_MS = 1200,
-    DNS_TYPE_A = 1,
-    DNS_TYPE_AAAA = 28,
-    DNS_TYPE_SVCB = 64,
-    DNS_TYPE_HTTPS = 65,
-    DNS_TYPE_ANY = 255,
+    DNS_UDP_WORKERS = 4,
     DNS_SERVFAIL = 2,
     DNS_REFUSED = 5,
 };
 
-struct ipv4_dns {
+struct vpn_dns_proxy {
     int udp;
     int tcp;
     int stop[2];
-    pthread_t udp_thread;
+    pthread_t udp_threads[DNS_UDP_WORKERS];
+    size_t udp_count;
     pthread_t tcp_thread;
     unsigned int interface_index;
     struct in_addr servers[2];
@@ -44,7 +38,7 @@ struct ipv4_dns {
 struct dns_question {
     size_t end;
     uint16_t type;
-    bool allowed;
+    uint16_t class;
 };
 
 static uint16_t read_u16(const unsigned char *bytes)
@@ -52,49 +46,79 @@ static uint16_t read_u16(const unsigned char *bytes)
     return (uint16_t)((bytes[0] << 8) | bytes[1]);
 }
 
-static bool matched_domain(const char *name, size_t length)
-{
-    for (size_t i = 0; ipv4_dns_domains[i] != NULL; i++) {
-        size_t suffix_length = strlen(ipv4_dns_domains[i]);
-        if (length < suffix_length)
-            continue;
-        size_t offset = length - suffix_length;
-        if ((offset == 0 || name[offset - 1] == '.') &&
-            strncasecmp(name + offset, ipv4_dns_domains[i], suffix_length) == 0)
-            return true;
-    }
-    return false;
-}
-
 static bool parse_question(const unsigned char *packet, size_t size, struct dns_question *question)
 {
     if (size < DNS_HEADER_SIZE || (packet[2] & 0xf8) != 0 || read_u16(packet + 4) != 1)
         return false;
 
-    char name[253];
     size_t offset = DNS_HEADER_SIZE;
-    size_t length = 0;
     while (offset < size && packet[offset] != 0) {
         size_t label = packet[offset++];
-        if (label > 63 || label > size - offset || length + (length != 0) + label > sizeof(name))
+        if (label > 63 || label > size - offset || offset + label - DNS_HEADER_SIZE >= 255)
             return false;
-        if (length != 0)
-            name[length++] = '.';
-        for (size_t i = 0; i < label; i++) {
-            unsigned char byte = packet[offset++];
-            if (!((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
-                  (byte >= '0' && byte <= '9') || byte == '-' || byte == '_'))
-                return false;
-            name[length++] = (char)byte;
-        }
+        offset += label;
     }
 
-    if (size - offset < 5 || read_u16(packet + offset + 3) != 1)
+    if (size - offset < 5)
         return false;
     question->end = offset + 5;
     question->type = read_u16(packet + offset + 1);
-    question->allowed = matched_domain(name, length);
+    question->class = read_u16(packet + offset + 3);
     return true;
+}
+
+static bool is_plain_address_query(const unsigned char *packet, size_t size,
+                                   const struct dns_question *question)
+{
+    // Forward queries requesting DNSSEC or carrying authentication untouched.
+    if (question->type != ns_t_aaaa || question->class != ns_c_in || (packet[3] & 0x30))
+        return false;
+    ns_msg message;
+    if (ns_initparse(packet, (int)size, &message) != 0 || ns_msg_count(message, ns_s_an) != 0 ||
+        ns_msg_count(message, ns_s_ns) != 0)
+        return false;
+    for (int i = 0; i < ns_msg_count(message, ns_s_ar); i++) {
+        ns_rr record;
+        if (ns_parserr(&message, ns_s_ar, i, &record) != 0 ||
+            ns_rr_type(record) != ns_t_opt || (ns_rr_ttl(record) & 0x8000))
+            return false;
+    }
+    return true;
+}
+
+static bool has_address_answer(const unsigned char *packet, size_t size, ns_type type)
+{
+    ns_msg message;
+    ns_rr question;
+    // Do not prefer an address based on truncated, authenticated or negative data.
+    if (ns_initparse(packet, (int)size, &message) != 0 ||
+        (packet[2] & 0x02) || (packet[3] & 0x2f) ||
+        ns_parserr(&message, ns_s_qd, 0, &question) != 0)
+        return false;
+    int count = ns_msg_count(message, ns_s_an);
+    char name[NS_MAXDNAME];
+    strlcpy(name, ns_rr_name(question), sizeof(name));
+    // Follow the answer's CNAME chain and ignore addresses for unrelated names.
+    for (int redirects = 0; redirects < 8; redirects++) {
+        char alias[NS_MAXDNAME] = "";
+        for (int i = 0; i < count; i++) {
+            ns_rr record;
+            if (ns_parserr(&message, ns_s_an, i, &record) != 0)
+                return false;
+            if (ns_rr_class(record) != ns_c_in || strcasecmp(ns_rr_name(record), name) != 0)
+                continue;
+            if (ns_rr_type(record) == type && ns_rr_rdlen(record) == (type == ns_t_a ? 4 : 16))
+                return true;
+            if (ns_rr_type(record) == ns_t_cname &&
+                ns_name_uncompress(packet, packet + size, ns_rr_rdata(record),
+                                   alias, sizeof(alias)) != ns_rr_rdlen(record))
+                return false;
+        }
+        if (alias[0] == '\0' || strcasecmp(alias, name) == 0)
+            return false;
+        strlcpy(name, alias, sizeof(name));
+    }
+    return false;
 }
 
 static size_t empty_response(const unsigned char *request, const struct dns_question *question,
@@ -114,7 +138,7 @@ static int64_t now_ms(void)
     return (int64_t)time.tv_sec * 1000 + time.tv_nsec / 1000000;
 }
 
-static bool ready(const struct ipv4_dns *resolver, int fd, short events, int64_t deadline)
+static bool ready(const struct vpn_dns_proxy *resolver, int fd, short events, int64_t deadline)
 {
     struct pollfd sockets[] = {
         {.fd = resolver->stop[0], .events = POLLIN},
@@ -141,7 +165,7 @@ static bool prepare_socket(int fd, int type)
             setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled)) == 0);
 }
 
-static bool transfer(const struct ipv4_dns *resolver, int fd, unsigned char *buffer, size_t size,
+static bool transfer(const struct vpn_dns_proxy *resolver, int fd, unsigned char *buffer, size_t size,
                      short events, int64_t deadline)
 {
     while (size != 0 && ready(resolver, fd, events, deadline)) {
@@ -156,7 +180,7 @@ static bool transfer(const struct ipv4_dns *resolver, int fd, unsigned char *buf
     return size == 0;
 }
 
-static size_t read_frame(const struct ipv4_dns *resolver, int fd, unsigned char *buffer,
+static size_t read_frame(const struct vpn_dns_proxy *resolver, int fd, unsigned char *buffer,
                          int64_t deadline)
 {
     unsigned char prefix[2];
@@ -166,7 +190,7 @@ static size_t read_frame(const struct ipv4_dns *resolver, int fd, unsigned char 
     return transfer(resolver, fd, buffer, size, POLLIN, deadline) ? size : 0;
 }
 
-static bool write_frame(const struct ipv4_dns *resolver, int fd, unsigned char *buffer,
+static bool write_frame(const struct vpn_dns_proxy *resolver, int fd, unsigned char *buffer,
                         size_t size, int64_t deadline)
 {
     unsigned char prefix[] = {(unsigned char)(size >> 8), (unsigned char)size};
@@ -174,7 +198,7 @@ static bool write_frame(const struct ipv4_dns *resolver, int fd, unsigned char *
            transfer(resolver, fd, buffer, size, POLLOUT, deadline);
 }
 
-static bool connect_upstream(const struct ipv4_dns *resolver, int fd, struct in_addr address,
+static bool connect_upstream(const struct vpn_dns_proxy *resolver, int fd, struct in_addr address,
                              int64_t deadline)
 {
     struct sockaddr_in peer = {
@@ -193,7 +217,7 @@ static bool connect_upstream(const struct ipv4_dns *resolver, int fd, struct in_
     return getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0;
 }
 
-static size_t query_upstream(const struct ipv4_dns *resolver, struct in_addr server, int type,
+static size_t query_upstream(const struct vpn_dns_proxy *resolver, struct in_addr server, int type,
                              unsigned char *request, size_t size, unsigned char *response)
 {
     size_t result = 0;
@@ -218,44 +242,54 @@ done:
     return result;
 }
 
-static size_t answer_query(const struct ipv4_dns *resolver, int type, unsigned char *request,
+static bool matches_question(const unsigned char *request, const struct dns_question *question,
+                             const unsigned char *response, size_t count)
+{
+    return count >= question->end && read_u16(response) == read_u16(request) &&
+           (response[2] & 0xf8) == 0x80 && read_u16(response + 4) == 1 &&
+           memcmp(request + DNS_HEADER_SIZE, response + DNS_HEADER_SIZE,
+                  question->end - DNS_HEADER_SIZE) == 0;
+}
+
+static bool a_record_exists(const struct vpn_dns_proxy *resolver, struct in_addr server, int type,
+                            const unsigned char *request, size_t size,
+                            const struct dns_question *question)
+{
+    unsigned char answer[DNS_MAX_PACKET], lookup[DNS_MAX_PACKET];
+    memcpy(lookup, request, size);
+    arc4random_buf(lookup, 2);
+    lookup[question->end - 4] = 0;
+    lookup[question->end - 3] = ns_t_a;
+    size_t count = query_upstream(resolver, server, type, lookup, size, answer);
+    return matches_question(lookup, question, answer, count) &&
+           has_address_answer(answer, count, ns_t_a);
+}
+
+static size_t answer_query(const struct vpn_dns_proxy *resolver, int type, unsigned char *request,
                            size_t size, unsigned char *response)
 {
     struct dns_question question;
     if (!parse_question(request, size, &question))
         return 0;
-    if (!question.allowed)
-        return empty_response(request, &question, response, DNS_REFUSED);
-    // HTTPS/SVCB can advertise IPv6 addresses even when AAAA returns no data.
-    if (question.type == DNS_TYPE_AAAA || question.type == DNS_TYPE_HTTPS ||
-        question.type == DNS_TYPE_SVCB || question.type == DNS_TYPE_ANY)
-        return empty_response(request, &question, response, 0);
-    if (question.type != DNS_TYPE_A)
-        return empty_response(request, &question, response, DNS_REFUSED);
-
-    // Forward only the parsed question. Extra records and query options stay local.
-    request[2] &= 1;
-    request[3] &= 0x10;
-    memset(request + 6, 0, 6);
-    size = question.end;
-
     for (size_t i = 0; i < 2; i++) {
         if (resolver->servers[i].s_addr == INADDR_ANY)
             continue;
         size_t count = query_upstream(resolver, resolver->servers[i], type, request, size, response);
-        if (count < DNS_HEADER_SIZE || count < question.end || read_u16(response) != read_u16(request) ||
-            (response[2] & 0xf8) != 0x80 || read_u16(response + 4) != 1 ||
-            memcmp(request + DNS_HEADER_SIZE, response + DNS_HEADER_SIZE,
-                   question.end - DNS_HEADER_SIZE) != 0)
+        if (!matches_question(request, &question, response, count))
             continue;
         unsigned char rcode = response[3] & 0x0f;
-        if (rcode != DNS_SERVFAIL && rcode != DNS_REFUSED)
-            return count;
+        if (rcode == DNS_SERVFAIL || rcode == DNS_REFUSED)
+            continue;
+        if (is_plain_address_query(request, size, &question) &&
+            has_address_answer(response, count, ns_t_aaaa) &&
+            a_record_exists(resolver, resolver->servers[i], type, request, size, &question))
+            return empty_response(request, &question, response, 0);
+        return count;
     }
     return empty_response(request, &question, response, DNS_SERVFAIL);
 }
 
-static void handle_udp(const struct ipv4_dns *resolver, unsigned char *request,
+static void handle_udp(const struct vpn_dns_proxy *resolver, unsigned char *request,
                        unsigned char *response)
 {
     struct sockaddr_in peer;
@@ -269,7 +303,7 @@ static void handle_udp(const struct ipv4_dns *resolver, unsigned char *request,
         sendto(resolver->udp, response, count, 0, (const struct sockaddr *)&peer, length);
 }
 
-static void handle_tcp(const struct ipv4_dns *resolver, unsigned char *request,
+static void handle_tcp(const struct vpn_dns_proxy *resolver, unsigned char *request,
                        unsigned char *response)
 {
     int client = accept(resolver->tcp, NULL, NULL);
@@ -284,7 +318,7 @@ static void handle_tcp(const struct ipv4_dns *resolver, unsigned char *request,
     close(client);
 }
 
-static void serve(const struct ipv4_dns *resolver, int fd, bool tcp)
+static void serve(const struct vpn_dns_proxy *resolver, int fd, bool tcp)
 {
     unsigned char request[DNS_MAX_PACKET], response[DNS_MAX_PACKET];
     struct pollfd sockets[] = {
@@ -306,14 +340,14 @@ static void serve(const struct ipv4_dns *resolver, int fd, bool tcp)
 
 static void *serve_udp(void *context)
 {
-    const struct ipv4_dns *resolver = context;
+    const struct vpn_dns_proxy *resolver = context;
     serve(resolver, resolver->udp, false);
     return NULL;
 }
 
 static void *serve_tcp(void *context)
 {
-    const struct ipv4_dns *resolver = context;
+    const struct vpn_dns_proxy *resolver = context;
     serve(resolver, resolver->tcp, true);
     return NULL;
 }
@@ -332,10 +366,10 @@ static int listen_on_loopback(int type, struct sockaddr_in *address)
     return -1;
 }
 
-struct ipv4_dns *ipv4_dns_start(unsigned int interface_index, const struct in_addr servers[2],
+struct vpn_dns_proxy *vpn_dns_proxy_start(unsigned int interface_index, const struct in_addr servers[2],
                                uint16_t upstream_port, uint16_t *local_port)
 {
-    struct ipv4_dns *resolver = calloc(1, sizeof(*resolver));
+    struct vpn_dns_proxy *resolver = calloc(1, sizeof(*resolver));
     if (resolver == NULL)
         return NULL;
     resolver->interface_index = interface_index;
@@ -354,20 +388,21 @@ struct ipv4_dns *ipv4_dns_start(unsigned int interface_index, const struct in_ad
     if (pipe(resolver->stop) != 0)
         goto fail_tcp;
     if (fcntl(resolver->stop[0], F_SETFD, FD_CLOEXEC) != 0 ||
-        fcntl(resolver->stop[1], F_SETFD, FD_CLOEXEC) != 0 ||
-        pthread_create(&resolver->udp_thread, NULL, serve_udp, resolver) != 0)
-        goto fail_pipe;
-    if (pthread_create(&resolver->tcp_thread, NULL, serve_tcp, resolver) != 0) {
-        close(resolver->stop[1]);
-        pthread_join(resolver->udp_thread, NULL);
-        goto fail_stop_reader;
+        fcntl(resolver->stop[1], F_SETFD, FD_CLOEXEC) != 0)
+        goto fail_workers;
+    for (; resolver->udp_count < DNS_UDP_WORKERS; resolver->udp_count++) {
+        if (pthread_create(&resolver->udp_threads[resolver->udp_count], NULL, serve_udp, resolver) != 0)
+            goto fail_workers;
     }
+    if (pthread_create(&resolver->tcp_thread, NULL, serve_tcp, resolver) != 0)
+        goto fail_workers;
     *local_port = ntohs(address.sin_port);
     return resolver;
 
-fail_pipe:
+fail_workers:
     close(resolver->stop[1]);
-fail_stop_reader:
+    for (size_t i = 0; i < resolver->udp_count; i++)
+        pthread_join(resolver->udp_threads[i], NULL);
     close(resolver->stop[0]);
 fail_tcp:
     close(resolver->tcp);
@@ -378,10 +413,11 @@ fail:
     return NULL;
 }
 
-void ipv4_dns_stop(struct ipv4_dns *resolver)
+void vpn_dns_proxy_stop(struct vpn_dns_proxy *resolver)
 {
     close(resolver->stop[1]);
-    pthread_join(resolver->udp_thread, NULL);
+    for (size_t i = 0; i < resolver->udp_count; i++)
+        pthread_join(resolver->udp_threads[i], NULL);
     pthread_join(resolver->tcp_thread, NULL);
     close(resolver->stop[0]);
     close(resolver->tcp);

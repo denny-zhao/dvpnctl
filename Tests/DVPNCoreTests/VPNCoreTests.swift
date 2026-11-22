@@ -11,6 +11,7 @@ struct VPNCoreTests {
         tests.testStatusTracksTunnelNotGatewayAndDoesNotUndoDisconnect()
         tests.testFirstFailureEntersReconnectOnlyWhenEnabled()
         try tests.testWorkerPipesConfigAndStopsOnControlEOF()
+        try tests.testIPv4PreferenceIsOptInAndReachesWorker()
         try tests.testWorkerStopsWhenChildIgnoresTermination()
         try tests.testFullLogSocketDoesNotBlockSender()
         try tests.testPrivilegePolicy()
@@ -27,7 +28,7 @@ struct VPNCoreTests {
         try tests.testLanguageChoicePersistsAndResolvesSystemPreferences()
         tests.testStatusAndErrorsRenderInBothLanguages()
         try tests.testLanguageDoesNotOversizeRequestWithReconnectOff()
-        print("22 tests passed")
+        print("23 tests passed")
         try tests.testKeychainRoundTripIfEnabled()
     }
 
@@ -245,7 +246,7 @@ struct VPNCoreTests {
         let executable = URL(fileURLWithPath: location.directory).appendingPathComponent("test-vpn")
         try """
             #!/bin/sh
-            /bin/cat "$2" | /usr/bin/grep -qx 'password = demo-password' || exit 41
+            /bin/cat "$3" | /usr/bin/grep -qx 'password = demo-password' || exit 41
             trap 'echo stopped; exit \(childExit)' TERM
             echo ready
             while :; do /bin/sleep 0.1 2>/dev/null; done
@@ -345,8 +346,9 @@ struct VPNCoreTests {
     func testWorkerPipesConfigAndStopsOnControlEOF() throws {
         let script = """
         #!/bin/sh
-        [ "$#" = 2 ] && [ "$1" = -c ] && [ "$2" = /dev/fd/0 ] || exit 40
-        /bin/cat "$2" | /usr/bin/grep -qx 'persistent = 20' || exit 41
+        [ "$#" = 3 ] && [ "$1" = --ipv6 ] && [ "$2" = -c ] && [ "$3" = /dev/fd/0 ] || exit 40
+        /bin/cat "$3" | /usr/bin/grep -qx 'persistent = 20' || exit 41
+        [ -z "${DFORTICLIENT_PREFER_IPV4:-}" ] || exit 42
         trap 'echo stopped; exit 0' TERM
         echo ready
         while :; do /bin/sleep 0.1; done
@@ -354,10 +356,31 @@ struct VPNCoreTests {
         try exerciseWorker(script: script, expectedStatus: 0, expectedOutput: "stopped\n")
     }
 
+    func testIPv4PreferenceIsOptInAndReachesWorker() throws {
+        let oldProfile = Data("""
+            {"host":"vpn.example.test","port":"443","username":"alice","realm":"",
+             "trustedCertificate":"","keepConnected":true,"retryInterval":"30"}
+            """.utf8)
+        var profile = try JSONDecoder().decode(VPNProfile.self, from: oldProfile)
+        check(profile.preferIPv4 == nil)
+        profile.preferIPv4 = true
+        let saved = try JSONEncoder().encode(profile)
+        check(try JSONDecoder().decode(VPNProfile.self, from: saved).preferIPv4 == true)
+        let script = """
+        #!/bin/sh
+        /bin/cat "$3" >/dev/null
+        [ "${DFORTICLIENT_PREFER_IPV4:-}" = 1 ] || exit 42
+        trap 'echo stopped; exit 0' TERM
+        echo ready
+        while :; do /bin/sleep 0.1; done
+        """
+        try exerciseWorker(script: script, expectedStatus: 0, expectedOutput: "stopped\n", profile: profile)
+    }
+
     func testWorkerStopsWhenChildIgnoresTermination() throws {
         let script = """
         #!/bin/sh
-        /bin/cat "$2" >/dev/null
+        /bin/cat "$3" >/dev/null
         trap '' TERM
         echo ready
         while :; do /bin/sleep 0.1; done
@@ -396,7 +419,8 @@ struct VPNCoreTests {
         check(!PrivilegePolicy.isAdministrator(0))
     }
 
-    private func exerciseWorker(script: String, expectedStatus: Int32, expectedOutput: String) throws {
+    private func exerciseWorker(script: String, expectedStatus: Int32, expectedOutput: String,
+                                profile: VPNProfile? = nil) throws {
         let listener = try LocalListener()
         let executable = URL(fileURLWithPath: listener.directory).appendingPathComponent("fake-vpn")
         try script.write(to: executable, atomically: true, encoding: .utf8)
@@ -414,7 +438,7 @@ struct VPNCoreTests {
         }
         check(try listener.socket.waitForInput(milliseconds: 5000))
         guard let socket = try listener.accept(expectedUser: getuid()) else { fatalError("Wrong worker UID") }
-        try socket.sendRequest(VPNRequest(profile: sampleProfile, password: "secret"))
+        try socket.sendRequest(VPNRequest(profile: profile ?? sampleProfile, password: "secret"))
         var output = ""
         while !output.contains("ready\n") {
             check(try socket.waitForInput(milliseconds: 5000))

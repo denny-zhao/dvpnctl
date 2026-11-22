@@ -8,54 +8,49 @@
  #include "userinput.h"
  
  #include <openssl/err.h>
-@@ -50,6 +51,7 @@
- #include <fcntl.h>
- #include <ifaddrs.h>
- #include <netdb.h>
-+#include <pthread.h>
- #if HAVE_PTY_H
- #include <pty.h>
- #elif HAVE_UTIL_H
-@@ -133,8 +135,35 @@
+@@ -154,9 +155,38 @@
+ 			log_warn("Could not configure IPv6, continuing with IPv4.\n");
  	}
  
-+	/* The interface and routes are ready even if DNS setup is interrupted. */
++	/* Keep address and route teardown available if DNS setup is cancelled. */
 +	tunnel->state = STATE_UP;
-+
  	if (tunnel->config->set_dns) {
 -		log_info("Adding VPN nameservers...\n");
 -		ipv4_add_nameservers_to_resolv_conf(tunnel);
 +		int previous_cancel_state;
 +		enum macos_vpn_dns_result result;
++		const char *preference = getenv("DFORTICLIENT_PREFER_IPV4");
++		bool enabled = preference != NULL && !strcmp(preference, "1");
++		bool vpn_ipv6_default = tunnel->ipv6.ready && tunnel->ipv6.full_tunnel &&
++		                        tunnel->ipv6.installed_routes == tunnel->ipv6.route_count;
++		bool prefer_ipv4 = enabled && !vpn_ipv6_default && !tunnel->ipv6.only &&
++		                   tunnel->config->set_routes && ipv4_has_vpn_default_route(tunnel);
++		size_t ipv6_dns_count = tunnel->ipv6.ready ? tunnel->ipv6.dns_count : 0;
 +
-+		/* Keep the temporary record and its session handle together on cancellation. */
 +		pthread_testcancel();
 +		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel_state);
 +		result = macos_vpn_dns_register(&tunnel->macos_dns, tunnel->ppp_iface,
 +		                                tunnel->ipv4.ns1_addr, tunnel->ipv4.ns2_addr,
-+		                                tunnel->ipv4.dns_suffix);
-+		if (result == MACOS_VPN_DNS_REGISTERED)
-+			tunnel->macos_ipv4_dns = macos_ipv4_dns_register(tunnel->ppp_iface,
-+			                                                tunnel->ipv4.ns1_addr,
-+			                                                tunnel->ipv4.ns2_addr);
++		                                tunnel->ipv4.dns_suffix,
++		                                tunnel->ipv6.dns, ipv6_dns_count, prefer_ipv4);
 +		pthread_setcancelstate(previous_cancel_state, NULL);
 +
-+		if (result == MACOS_VPN_DNS_REGISTERED) {
++		if (result == MACOS_VPN_DNS_IPV4_PREFERRED)
++			log_info("Registered VPN DNS with IPv4 preference for dual-stack lookups.\n");
++		else if (result == MACOS_VPN_DNS_REGISTERED)
 +			log_info("Registered VPN DNS with macOS.\n");
-+			if (tunnel->macos_ipv4_dns != NULL)
-+				log_info("Enabled IPv4 for ChatGPT and Codex domains.\n");
-+			else
-+				log_warn("Could not enable IPv4 for ChatGPT and Codex domains.\n");
-+		} else if (result == MACOS_VPN_DNS_NO_ROUTE)
++		else if (result == MACOS_VPN_DNS_NO_ROUTE)
 +			log_warn("VPN DNS unavailable: no route to a VPN nameserver via %s.\n",
 +			         tunnel->ppp_iface);
 +		else if (result == MACOS_VPN_DNS_ERROR)
 +			log_warn("Could not register VPN DNS with macOS.\n");
++		if (enabled && result != MACOS_VPN_DNS_IPV4_PREFERRED)
++			log_info("IPv4 preference is inactive for this VPN session.\n");
  	}
  
  	log_info("Tunnel is up and running.\n");
-@@ -157,11 +186,6 @@
- 	if (tunnel->config->set_routes) {
+@@ -179,11 +209,6 @@
+ 	if (!tunnel->ipv6.only && tunnel->config->set_routes) {
  		log_info("Restoring routes...\n");
  		ipv4_restore_routes(tunnel);
 -	}
@@ -66,13 +61,11 @@
  	}
  
  	return 0;
-@@ -1439,6 +1463,13 @@
+@@ -1495,6 +1520,11 @@
  	io_loop(&tunnel);
  
  	log_debug("Disconnecting\n");
-+	/* Release the temporary DNS sessions before restoring tunnel routes. */
-+	macos_ipv4_dns_unregister(tunnel.macos_ipv4_dns);
-+	tunnel.macos_ipv4_dns = NULL;
++	/* Release the VPN resolver record before restoring the tunnel routes. */
 +	if (tunnel.macos_dns != NULL) {
 +		macos_vpn_dns_unregister(&tunnel.macos_dns);
 +		log_info("Removed VPN DNS from macOS.\n");
@@ -82,12 +75,53 @@
  			tunnel.on_ppp_if_down(&tunnel);
 --- a/src/tunnel.h
 +++ b/src/tunnel.h
-@@ -72,6 +72,8 @@
+@@ -75,6 +75,7 @@
  	SSL	*ssl_handle;
  
  	struct ipv4_config ipv4;
-+	const struct __SCDynamicStore *macos_dns;
-+	struct macos_ipv4_dns *macos_ipv4_dns;
++	struct macos_vpn_dns *macos_dns;
+ 	struct ipv6_config ipv6;
+ 	struct in6_addr ipv6_link_local;
+ 	atomic_bool ipv6cp_acked;
+--- a/src/ipv4.c
++++ b/src/ipv4.c
+@@ -1036,6 +1036,21 @@
+ 	return 0;
+ }
  
- 	int (*on_ppp_if_up)(struct tunnel *tunnel);
- 	int (*on_ppp_if_down)(struct tunnel *tunnel);
++bool ipv4_has_vpn_default_route(const struct tunnel *tunnel)
++{
++	struct rtentry route;
++	route_init(&route);
++	route_iface(&route) = strdup(tunnel->ppp_iface);
++	if (route_iface(&route) == NULL)
++		return false;
++	bool found = ipv4_get_route(&route) == 0 &&
++	             route_dest(&route).s_addr == INADDR_ANY &&
++	             route_mask(&route).s_addr == INADDR_ANY && (route.rt_flags & RTF_UP) &&
++	             !(route.rt_flags & (RTF_REJECT | RTF_BLACKHOLE));
++	route_destroy(&route);
++	return found;
++}
++
+ int ipv4_set_tunnel_routes(struct tunnel *tunnel)
+ {
+ 	int ret = ipv4_protect_tunnel_route(tunnel);
+--- a/src/ipv4.h
++++ b/src/ipv4.h
+@@ -18,6 +18,7 @@
+ #ifndef OPENFORTIVPN_IPV4_H
+ #define OPENFORTIVPN_IPV4_H
+ 
++#include <stdbool.h>
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+@@ -88,6 +89,7 @@
+ int ipv4_drop_wrong_route(struct tunnel *tunnel);
+ int ipv4_add_split_vpn_route(struct tunnel *tunnel, char *dest, char *mask,
+                              char *gateway);
++bool ipv4_has_vpn_default_route(const struct tunnel *tunnel);
+ int ipv4_set_tunnel_routes(struct tunnel *tunnel);
+ int ipv4_restore_routes(struct tunnel *tunnel);
+ 

@@ -2,15 +2,17 @@ dFortiClient ships OpenFortiVPN as a separate executable linked with OpenSSL.
 
 OpenFortiVPN 1.24.1: GPL-3.0-or-later with the OpenSSL exception.
 The included source archive contains LICENSE and LICENSE.OpenSSL.
-Upstream: https://github.com/adrienverge/openfortivpn/tree/v1.24.1
+Upstream: https://github.com/adrienverge/openfortivpn
+IPv6 fork: https://github.com/denny-zhao/openfortivpn
+The exact fork revision and archive digest are in openfortivpn-source.conf.
 
 OpenSSL 3.5.9: Apache License 2.0. The included source archive contains
 LICENSE.txt and NOTICE.txt.
 Upstream: https://github.com/openssl/openssl/tree/openssl-3.5.9
 
 The bundled OpenFortiVPN is modified for macOS system DNS. The patch and
-macos-vpn-dns.c/.h and ipv4-dns.c/.h use the same license and exception.
-Keep these files alongside build-vpn-runtime.sh to reproduce the executable.
+macos-vpn-dns.c/.h and vpn-dns-proxy.c/.h use the same license and exception.
+Keep these files and openfortivpn-source.conf alongside build-vpn-runtime.sh.
 Run the script with an output path, arm64 or x86_64, 13.0, and the absolute
 path to a local directory containing the archives. The universal executable
 combines both slices with lipo -create.

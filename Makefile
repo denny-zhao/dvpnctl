@@ -11,13 +11,16 @@ NAME = dFortiClient
 APP = dist/$(NAME).app
 DMG = dist/$(NAME).dmg
 PKG = dist/$(NAME).pkg
-DMG_STAGE = .build/installer-image
+DMG_STAGE = .build/installer-image-$(VERSION)
 PKG_ROOT = .build/installer-root
 PKG_SCRIPTS = .build/installer-scripts
 SUPPORT = Library/Application Support/dFortiClient
 ARCHIVES = .build/sources
+include scripts/openfortivpn-source.conf
+OPENFORTIVPN_ARCHIVE = openfortivpn-$(OPENFORTIVPN_REV).tar.gz
 VPN_RUNTIME_SOURCES = scripts/build-vpn-runtime.sh scripts/openfortivpn-macos-dns.patch \
-	scripts/macos-vpn-dns.c scripts/macos-vpn-dns.h scripts/ipv4-dns.c scripts/ipv4-dns.h
+	scripts/macos-vpn-dns.c scripts/macos-vpn-dns.h scripts/vpn-dns-proxy.c scripts/vpn-dns-proxy.h \
+	scripts/openfortivpn-source.conf
 VERSION = $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
 SIGN_ID ?= -
 SIGN_OPTIONS ?= --options runtime
@@ -72,7 +75,7 @@ pkg: app .build/$(NAME)Daemon-$(ARCH) .build/openfortivpn-$(ARCH)
 dmg: pkg
 	mkdir -p "$(DMG_STAGE)/Third-Party Sources"
 	install -m 644 "$(PKG)" "$(DMG_STAGE)/$(NAME).pkg"
-	install -m 644 "$(ARCHIVES)/openfortivpn-1.24.1.tar.gz" "$(ARCHIVES)/openssl-3.5.9.tar.gz" \
+	install -m 644 "$(ARCHIVES)/$(OPENFORTIVPN_ARCHIVE)" "$(ARCHIVES)/openssl-3.5.9.tar.gz" \
 		$(VPN_RUNTIME_SOURCES) "Packaging/Third-Party.txt" "$(DMG_STAGE)/Third-Party Sources"
 	hdiutil create -ov -volname "$(NAME)" -srcfolder "$(DMG_STAGE)" -format UDZO "$(DMG)"
 
@@ -83,26 +86,26 @@ install: pkg
 	mkdir -p .build
 	$(SWIFTC) -parse-as-library -o $@ $(CORE) $(TESTS)
 
-.build/macos-vpn-dns-tests: Tests/Packaging/macos-vpn-dns-tests.c scripts/macos-vpn-dns.c scripts/macos-vpn-dns.h scripts/ipv4-dns.h Makefile
+.build/macos-vpn-dns-tests: Tests/Packaging/macos-vpn-dns-tests.c scripts/macos-vpn-dns.c scripts/macos-vpn-dns.h scripts/vpn-dns-proxy.h Makefile
 	mkdir -p .build
 	xcrun clang -Wall -Wextra -Werror -I scripts \
 		-DSCDynamicStoreCreate=test_store_create -DSCDynamicStoreAddTemporaryValue=test_store_add \
 		-Dif_nametoindex=test_if_nametoindex -Dsetsockopt=test_setsockopt -Dconnect=test_connect \
 		$< scripts/macos-vpn-dns.c -framework CoreFoundation -framework SystemConfiguration -o "$@"
 
-.build/ipv4-dns-tests: Tests/Packaging/ipv4-dns-tests.c scripts/ipv4-dns.c scripts/ipv4-dns.h Makefile
+.build/vpn-dns-proxy-tests: Tests/Packaging/vpn-dns-proxy-tests.c scripts/vpn-dns-proxy.c scripts/vpn-dns-proxy.h Makefile
 	mkdir -p .build
-	xcrun clang -Wall -Wextra -Werror -I scripts $< scripts/ipv4-dns.c -o "$@"
+	xcrun clang -Wall -Wextra -Werror -I scripts $< scripts/vpn-dns-proxy.c -lresolv -o "$@"
 
-test: .build/core-tests .build/macos-vpn-dns-tests .build/ipv4-dns-tests
+test: .build/core-tests .build/macos-vpn-dns-tests .build/vpn-dns-proxy-tests
 	.build/core-tests
 	.build/macos-vpn-dns-tests
-	.build/ipv4-dns-tests
+	.build/vpn-dns-proxy-tests
 
 .build/openfortivpn-universal: .build/openfortivpn-arm64 .build/openfortivpn-x86_64
 	lipo -create -output "$@" $^
 
-.build/sources/.downloaded: scripts/build-vpn-runtime.sh
+.build/sources/.downloaded: scripts/build-vpn-runtime.sh scripts/openfortivpn-source.conf
 	/bin/sh scripts/build-vpn-runtime.sh --download "$(ARCHIVES)"
 	touch "$@"
 
@@ -113,7 +116,7 @@ test: .build/core-tests .build/macos-vpn-dns-tests .build/ipv4-dns-tests
 vpn-runtime: .build/openfortivpn-$(ARCH)
 
 test-dmg:
-	/bin/sh Tests/Packaging/check-image.sh "$(DMG)" "$(ARCH)"
+	/bin/sh Tests/Packaging/check-image.sh "$(DMG)" "$(ARCH)" "$(OPENFORTIVPN_ARCHIVE)"
 
 clean:
 	rm -rf .build dist

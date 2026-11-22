@@ -155,15 +155,23 @@ struct ConnectionView: View {
             .disabled(model.isActive)
 
             GroupBox {
-                HStack {
-                    Toggle(localized("Reconnect automatically", "掉线后自动重连"), isOn: $model.draft.settings.keepConnected)
-                    Spacer()
-                    if model.draft.settings.keepConnected {
-                        Text(localized("Retry interval", "重试间隔"))
-                        TextField("30", text: $model.draft.settings.retryInterval).frame(width: 60)
-                            .accessibilityLabel(localized("Retry interval", "重试间隔"))
-                        Text(localized("seconds", "秒")).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Toggle(localized("Reconnect automatically", "掉线后自动重连"), isOn: $model.draft.settings.keepConnected)
+                        Spacer()
+                        if model.draft.settings.keepConnected {
+                            Text(localized("Retry interval", "重试间隔"))
+                            TextField("30", text: $model.draft.settings.retryInterval).frame(width: 60)
+                                .accessibilityLabel(localized("Retry interval", "重试间隔"))
+                            Text(localized("seconds", "秒")).foregroundStyle(.secondary)
+                        }
                     }
+                    Toggle(localized("Prefer IPv4 when the VPN only has an IPv4 default route",
+                                     "VPN 只有 IPv4 默认路由时优先使用 IPv4"),
+                           isOn: Binding(get: { model.draft.settings.preferIPv4 == true },
+                                         set: { model.draft.settings.preferIPv4 = $0 ? true : nil }))
+                        .help(localized("Try this if some websites or apps fail while the VPN is connected. Reconnect to apply.",
+                                        "连着 VPN 时如果部分网站或应用无法访问，可以尝试开启。重新连接后生效。"))
                 }
                 .padding(8)
             }

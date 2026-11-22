@@ -8,6 +8,7 @@ struct VPNProfile: Codable, Equatable {
     var trustedCertificate = ""
     var keepConnected = true
     var retryInterval = "30"
+    var preferIPv4: Bool? = nil
 
     var loginTarget: VPNLoginTarget {
         VPNLoginTarget(host: host.lowercased(), port: Int(port), username: Data(username.utf8),
